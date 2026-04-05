@@ -1,6 +1,6 @@
 import {
   "moonbitlang/core/json",
-  "justjavac/ffi",
+  "lepus-apps/webview/ffi",
 }
 
 supported_targets = "+native"

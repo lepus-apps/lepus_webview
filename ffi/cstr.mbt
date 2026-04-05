@@ -176,7 +176,8 @@ pub fn from_cstr(b : Bytes) -> String {
 /// - **System calls**: Interfacing with POSIX APIs that require C strings
 /// - **Library integration**: Calling third-party C libraries from MoonBit
 pub fn to_cstr(s : String) -> Bytes {
-  let s = s.to_array()
-  s.push('\u{0000}')
-  return s.map(fn(c) { c.to_int().to_byte() }) |> Bytes::from_array
+  let buf = @buffer.new()
+  buf.write_string(s)
+  buf.write_byte(0x00) // Append null terminator
+  return buf.to_bytes()
 }

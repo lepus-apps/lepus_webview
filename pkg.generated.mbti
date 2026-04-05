@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "lepus-apps/lepus/webview"
+package "lepus-apps/webview"
 
 import {
   "moonbitlang/core/json",

@@ -134,8 +134,7 @@ pub fn from_wstr_lossy(b : Bytes) -> String {
   if b.length() < 2 || b[b.length() - 2] != 0x00 || b[b.length() - 1] != 0x00 {
     abort("expected null-terminated wide strings")
   }
-  let decoder = @encoding.decoder(UTF16)
-  return decoder.decode_lossy(b[0:b.length() - 2])
+  return @utf16.decode_lossy(b[0:b.length() - 2])
 }
 
 ///|
@@ -234,5 +233,5 @@ pub fn from_wstr_lossy(b : Bytes) -> String {
 /// - **Emojis**: Modern Unicode emojis and symbols
 /// - **Mathematical symbols**: Unicode mathematical and technical symbols
 pub fn to_wstr(s : String) -> Bytes {
-  return @encoding.encode(UTF16, s + "\u{0000}")
+  return @utf16.encode(s + "\u{0000}")
 }
