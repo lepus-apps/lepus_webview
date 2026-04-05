@@ -1,0 +1,140 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "lepus-apps/lepus/webview"
+
+import {
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn webview_bind(WebView_t, Bytes, FuncRef[(CStr, CStr, (Bytes, Bytes) -> Unit) -> Unit], (Bytes, Bytes) -> Unit) -> BindingHandle
+
+pub fn webview_create(Int, Int64) -> WebView_t
+
+pub fn webview_destroy(WebView_t) -> Int
+
+pub fn webview_dispatch(WebView_t, FuncRef[(WebView_t, (WebView_t) -> Unit) -> Unit], () -> Unit) -> Int
+
+pub fn webview_eval(WebView_t, Bytes) -> Int
+
+pub fn webview_get_native_handle(WebView_t, NativeHandleKind) -> Int64
+
+pub fn webview_get_window(WebView_t) -> Int64
+
+pub fn webview_init(WebView_t, Bytes) -> Int
+
+pub fn webview_navigate(WebView_t, Bytes) -> Int
+
+pub fn webview_return(WebView_t, Bytes, Int, Bytes) -> Int
+
+pub fn webview_run(WebView_t) -> Int
+
+pub fn webview_set_html(WebView_t, Bytes) -> Int
+
+pub fn webview_set_size(WebView_t, Int, Int, SizeHint) -> Int
+
+pub fn webview_set_title(WebView_t, Bytes) -> Int
+
+pub fn webview_terminate(WebView_t) -> Int
+
+pub fn webview_unbind(WebView_t, Bytes, BindingHandle) -> Int
+
+// Errors
+
+// Types and methods
+#external
+pub type BindingHandle
+
+#external
+pub type CStr
+
+pub struct Command {
+  name : String
+  payload : Json
+} derive(Eq, Show, ToJson, @json.FromJson)
+
+type CommandBridge
+pub fn CommandBridge::destroy(Self) -> Unit
+pub fn CommandBridge::event_name(Self) -> String
+pub fn CommandBridge::global_name(Self) -> String
+pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle(Self, String, (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result(Self, String, (Payload) -> Result[Reply, String]) -> Unit
+pub fn CommandBridge::new(WebView, global_name? : String, binding_name? : String, event_name? : String) -> Self
+pub fn[Payload : ToJson] CommandBridge::send(Self, String, Payload) -> Unit
+
+pub struct CommandResponse {
+  status : String
+  payload : Json?
+  error : String?
+} derive(Eq, Show, ToJson, @json.FromJson)
+pub fn CommandResponse::error(String) -> Self
+pub fn CommandResponse::is_ok(Self) -> Bool
+pub fn[Payload : ToJson] CommandResponse::ok(Payload) -> Self
+
+pub(all) enum NativeHandleKind {
+  Window
+  Widget
+  Browser
+} derive(Show)
+
+type Plugin
+pub fn Plugin::new(String, (PluginContext) -> Unit, on_install? : (PluginContext) -> Unit, on_destroy? : (PluginContext) -> Unit) -> Self
+
+type PluginContext
+pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command(Self, String, (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result(Self, String, (Payload) -> Result[Reply, String]) -> Unit
+pub fn[Payload : ToJson] PluginContext::emit(Self, String, Payload) -> Unit
+pub fn PluginContext::global_name(Self) -> String
+pub fn PluginContext::install_script(Self, String) -> Unit
+pub fn PluginContext::name(Self) -> String
+
+pub struct PluginEvent {
+  plugin : String
+  name : String
+  payload : Json
+} derive(Eq, Show, ToJson, @json.FromJson)
+
+type PluginHost
+pub fn PluginHost::command_bridge(Self) -> CommandBridge
+pub fn PluginHost::destroy(Self) -> Unit
+pub fn[Payload : ToJson] PluginHost::emit(Self, String, String, Payload) -> Unit
+pub fn PluginHost::global_name(Self) -> String
+pub fn PluginHost::install(Self, Plugin) -> Unit
+pub fn PluginHost::new(WebView, global_name? : String, command_global_name? : String, binding_name? : String, event_name? : String) -> Self
+pub fn PluginHost::run(Self) -> Unit
+
+pub(all) enum SizeHint {
+  None
+  Min
+  Max
+  Fixed
+} derive(Show)
+
+type WebView
+pub fn WebView::bind(Self, String, (Bytes, Bytes) -> Unit) -> Unit
+pub fn WebView::destroy(Self) -> Unit
+pub fn WebView::dispatch(Self, () -> Unit) -> Unit
+pub fn[Payload : ToJson] WebView::emit_plugin(Self, String, String, Payload) -> Unit
+pub fn WebView::eval(Self, String) -> Unit
+pub fn WebView::get_handle(Self) -> WebView_t
+pub fn WebView::get_native_handle(Self, NativeHandleKind) -> Int64
+pub fn WebView::get_window(Self) -> Int64
+pub fn WebView::init(Self, String) -> Unit
+pub fn WebView::install_plugin(Self, Plugin) -> Unit
+pub fn WebView::navigate(Self, String) -> Unit
+pub fn WebView::new(debug? : Int) -> Self
+pub fn WebView::plugin_host(Self) -> PluginHost
+pub fn WebView::response(Self, String, Int, String) -> Unit
+pub fn WebView::run(Self) -> Unit
+pub fn WebView::set_html(Self, String) -> Unit
+pub fn WebView::set_size(Self, Int, Int, SizeHint) -> Unit
+pub fn WebView::set_title(Self, String) -> Unit
+pub fn WebView::terminate(Self) -> Unit
+pub fn WebView::unbind(Self, String) -> Unit
+
+#external
+pub type WebView_t
+
+// Type aliases
+
+// Traits
+
