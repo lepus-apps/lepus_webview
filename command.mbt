@@ -227,8 +227,9 @@ fn CommandBridge::handle_request(
   raw_id : Bytes,
   raw_req : Bytes,
 ) -> Unit {
-  let id = @ffi.from_cstr(raw_id)
-  let response = match parse_command_request(@ffi.from_cstr(raw_req)) {
+  let id = try! @encoding/utf8.decode(raw_id)
+  let req = try! @encoding/utf8.decode(raw_req)
+  let response = match parse_command_request(req) {
     Ok(command) =>
       match self.handlers.get(command.name) {
         Some(handler) => handler(command.payload)

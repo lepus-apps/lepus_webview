@@ -70,7 +70,7 @@ pub fn WebView::destroy(self : WebView) -> Unit {
     hook()
   }
   for name, binding in self.bindings {
-    let _ = webview_unbind(self.handle, @ffi.to_cstr(name), binding)
+    let _ = webview_unbind(self.handle, @encoding/utf8.encode(name), binding)
   }
   let _ = webview_destroy(self.handle)
 }
@@ -118,7 +118,7 @@ pub fn WebView::bind(
 ) -> Unit {
   let binding = webview_bind(
     self.handle,
-    @ffi.to_cstr(name),
+    @encoding/utf8.encode(name),
     fn(raw_id, raw_req, f) {
       let id = webview_copy_cstr(raw_id)
       let req = webview_copy_cstr(raw_req)
@@ -143,7 +143,7 @@ pub fn WebView::unbind(self : WebView, name : String) -> Unit {
   match self.bindings.get(name) {
     Some(binding) => {
       self.bindings.remove(name)
-      let _ = webview_unbind(self.handle, @ffi.to_cstr(name), binding)
+      let _ = webview_unbind(self.handle, @encoding/utf8.encode(name), binding)
     }
     None => ()
   }
@@ -155,7 +155,7 @@ pub fn WebView::unbind(self : WebView, name : String) -> Unit {
 /// Parameters:
 /// - `title` - The new title.
 pub fn WebView::set_title(self : WebView, title : String) -> Unit {
-  let _ = webview_set_title(self.handle, @ffi.to_cstr(title))
+  let _ = webview_set_title(self.handle, @encoding/utf8.encode(title))
 }
 
 ///|
@@ -172,7 +172,7 @@ pub fn WebView::set_title(self : WebView, title : String) -> Unit {
 /// webview.run()
 /// ```
 pub fn WebView::set_html(self : WebView, html : String) -> Unit {
-  let _ = webview_set_html(self.handle, @ffi.to_cstr(html))
+  let _ = webview_set_html(self.handle, @encoding/utf8.encode(html))
 }
 
 ///|
@@ -191,7 +191,7 @@ pub fn WebView::set_html(self : WebView, html : String) -> Unit {
 /// webview.run()
 /// ```
 pub fn WebView::navigate(self : WebView, url : String) -> Unit {
-  let _ = webview_navigate(self.handle, @ffi.to_cstr(url))
+  let _ = webview_navigate(self.handle, @encoding/utf8.encode(url))
 }
 
 ///|
@@ -229,7 +229,7 @@ pub fn WebView::get_handle(self : WebView) -> WebView_t {
 /// Parameters:
 /// - `js` - The JavaScript code to evaluate.
 pub fn WebView::eval(self : WebView, js : String) -> Unit {
-  let _ = webview_eval(self.handle, @ffi.to_cstr(js))
+  let _ = webview_eval(self.handle, @encoding/utf8.encode(js))
 }
 
 ///|
@@ -239,7 +239,7 @@ pub fn WebView::eval(self : WebView, js : String) -> Unit {
 /// Parameters:
 /// - `js` - The JavaScript code to inject.
 pub fn WebView::init(self : WebView, js : String) -> Unit {
-  let _ = webview_init(self.handle, @ffi.to_cstr(js))
+  let _ = webview_init(self.handle, @encoding/utf8.encode(js))
 }
 
 ///|
@@ -263,9 +263,9 @@ pub fn WebView::response(
 ) -> Unit {
   let _ = webview_return(
     self.handle,
-    @ffi.to_cstr(id),
+    @encoding/utf8.encode(id),
     status,
-    @ffi.to_cstr(result),
+    @encoding/utf8.encode(result),
   )
 }
 

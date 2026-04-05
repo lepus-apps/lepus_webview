@@ -1,0 +1,9 @@
+import {
+  "lepus-apps/webview",
+}
+
+supported_targets = "+native"
+
+options(
+  is_main: true,
+)
