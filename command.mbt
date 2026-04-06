@@ -238,12 +238,10 @@ fn CommandBridge::handle_request(
 fn parse_command_request(raw_req : String) -> Command raise Error {
   // A webview binding receives its JS arguments as a JSON array. The bridge
   // expects exactly one argument: the `{ name, payload }` command object.
-  let request_json : Json = @json.parse(raw_req)
-  let request_args : Array[Command] = @json.from_json(request_json)
-  if request_args is [arg] {
-    arg
-  } else {
-    fail("Expected exactly one command argument")
+  let args : Array[Command] = @json.from_json(@json.parse(raw_req))
+  match args {
+    [cmd] => cmd
+    _ => fail("Expected exactly one command argument, got \{args.length()}")
   }
 }
 

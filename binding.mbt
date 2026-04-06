@@ -1,130 +1,144 @@
-/// This module provides the FFI (Foreign Function Interface) for the webview library.
-/// It allows the main application to call functions defined in the webview library.
-/// 
-/// see: https://github.com/webview/webview/blob/f1a9d6b6fb8bcc2e266057224887a3d628f30f90/webview.i
+/// FFI declarations for the webview C library.
+///
+/// All extern functions are package-private. Public-facing wrappers live in
+/// webview.mbt, command.mbt and plugin.mbt.
+///
+/// Ownership rules (moonbit-c-binding skill):
+///   #borrow(param) — C only reads the value during the call, does not store it.
+///   #owned(param)  — ownership transfers to C; C must moonbit_decref when done.
+/// Primitives (Int, Int64, Bool, …) are passed by value — no annotation needed.
+///
+/// see: https://github.com/webview/webview/blob/master/webview.h
 
 ///|
-/// typedef void *webview_t;
+/// Opaque handle returned by webview_create. C manages the underlying object.
 #external
 pub type WebView_t
 
 ///|
-/// Opaque binding handle returned by the native webview wrapper.
+/// Opaque binding record returned by moonbit_webview_bind.
+/// C allocates and owns it; MoonBit holds it only as a cookie for unbind.
 #external
 pub type BindingHandle
 
-///|
-/// extern webview_t webview_create(int debug, void *window);
-pub extern "C" fn webview_create(debug : Int, window : Int64) -> WebView_t = "webview_create"
+// ── Lifecycle ────────────────────────────────────────────────────────────────
 
 ///|
-/// extern void webview_destroy(webview_t w);
-pub extern "C" fn webview_destroy(webview : WebView_t) -> Int = "webview_destroy"
+extern "C" fn webview_create(debug : Int, window : Int64) -> WebView_t = "webview_create"
 
 ///|
-/// extern void webview_run(webview_t w);
-pub extern "C" fn webview_run(webview : WebView_t) -> Int = "webview_run"
+extern "C" fn webview_destroy(w : WebView_t) -> Unit = "webview_destroy"
 
 ///|
-/// extern void webview_terminate(webview_t w);
-pub extern "C" fn webview_terminate(webview : WebView_t) -> Int = "webview_terminate"
+extern "C" fn webview_run(w : WebView_t) -> Unit = "webview_run"
 
 ///|
-/// extern void webview_dispatch(webview_t w, void (*fn)(webview_t w, void *arg), void *arg);
-pub extern "C" fn webview_dispatch(
-  webview : WebView_t,
-  call_closure : FuncRef[(WebView_t, (WebView_t) -> Unit) -> Unit],
-  closure : () -> Unit,
-) -> Int = "webview_dispatch"
+extern "C" fn webview_terminate(w : WebView_t) -> Unit = "webview_terminate"
+
+// ── Window ───────────────────────────────────────────────────────────────────
 
 ///|
-/// extern void *webview_get_window(webview_t w);
-pub extern "C" fn webview_get_window(webview : WebView_t) -> Int64 = "webview_get_window"
-
-///|
-/// Returns a stable integer identity for the native webview handle.
-extern "C" fn webview_identity(webview : WebView_t) -> Int64 = "moonbit_webview_identity"
-
-///|
-/// extern void *webview_get_native_handle(webview_t w, webview_native_handle_kind_t kind);
-pub extern "C" fn webview_get_native_handle(
-  webview : WebView_t,
-  kind : NativeHandleKind,
-) -> Int64 = "webview_get_native_handle"
-
-///|
-/// extern void webview_set_title(webview_t w, const char *title);
 #borrow(title)
-pub extern "C" fn webview_set_title(webview : WebView_t, title : Bytes) -> Int = "webview_set_title"
+extern "C" fn webview_set_title(w : WebView_t, title : Bytes) -> Unit = "webview_set_title"
 
 ///|
-/// extern void webview_set_size(webview_t w, int width, int height, webview_hint_t hints);
-pub extern "C" fn webview_set_size(
-  webview : WebView_t,
+extern "C" fn webview_set_size(
+  w : WebView_t,
   width : Int,
   height : Int,
   hint : SizeHint,
-) -> Int = "webview_set_size"
+) -> Unit = "webview_set_size"
 
 ///|
-/// extern void webview_navigate(webview_t w, const char *url);
+extern "C" fn webview_get_window(w : WebView_t) -> Int64 = "webview_get_window"
+
+///|
+extern "C" fn webview_get_native_handle(
+  w : WebView_t,
+  kind : NativeHandleKind,
+) -> Int64 = "webview_get_native_handle"
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+///|
 #borrow(url)
-pub extern "C" fn webview_navigate(webview : WebView_t, url : Bytes) -> Int = "webview_navigate"
+extern "C" fn webview_navigate(w : WebView_t, url : Bytes) -> Unit = "webview_navigate"
 
 ///|
-/// extern void webview_set_html(webview_t w, const char *html);
 #borrow(html)
-pub extern "C" fn webview_set_html(webview : WebView_t, html : Bytes) -> Int = "webview_set_html"
+extern "C" fn webview_set_html(w : WebView_t, html : Bytes) -> Unit = "webview_set_html"
+
+// ── JavaScript ───────────────────────────────────────────────────────────────
 
 ///|
-/// extern void webview_init(webview_t w, const char *js);
 #borrow(js)
-pub extern "C" fn webview_init(webview : WebView_t, js : Bytes) -> Int = "webview_init"
+extern "C" fn webview_init(w : WebView_t, js : Bytes) -> Unit = "webview_init"
 
 ///|
-/// extern void webview_eval(webview_t w, const char *js);
 #borrow(js)
-pub extern "C" fn webview_eval(webview : WebView_t, js : Bytes) -> Int = "webview_eval"
+extern "C" fn webview_eval(w : WebView_t, js : Bytes) -> Unit = "webview_eval"
+
+// ── Dispatch ─────────────────────────────────────────────────────────────────
 
 ///|
-/// Wrapper around `webview_bind` that stores the owned MoonBit closure inside
-/// an opaque native binding record and returns that record as a handle for
-/// later unbind/cleanup.
+/// Schedule `closure` on the webview UI thread.
+/// `call_closure` is a closed FuncRef trampoline; `closure` is the MoonBit
+/// callback whose ownership transfers to C until it is invoked once.
+#owned(closure)
+extern "C" fn webview_dispatch(
+  w : WebView_t,
+  call_closure : FuncRef[(WebView_t, () -> Unit) -> Unit],
+  closure : () -> Unit,
+) -> Unit = "webview_dispatch"
+
+// ── Bindings ─────────────────────────────────────────────────────────────────
+
+///|
+/// Bind a MoonBit closure as a named JavaScript function.
+/// `name` is borrowed (used only during the call).
+/// `closure` ownership transfers to the returned BindingHandle.
 #borrow(name)
 #owned(closure)
-pub extern "C" fn webview_bind(
-  webview : WebView_t,
+extern "C" fn webview_bind(
+  w : WebView_t,
   name : Bytes,
   call_closure : FuncRef[(Bytes, Bytes, (Bytes, Bytes) -> Unit) -> Unit],
   closure : (Bytes, Bytes) -> Unit,
 ) -> BindingHandle = "moonbit_webview_bind"
 
 ///|
-/// Copies a raw C string into MoonBit-managed bytes, preserving the trailing
-/// null terminator.
+/// Unbind and free the native binding record.
+/// `name` is borrowed; the binding handle is consumed (freed) by C.
+#borrow(name)
+extern "C" fn webview_unbind(
+  w : WebView_t,
+  name : Bytes,
+  binding : BindingHandle,
+) -> Unit = "moonbit_webview_unbind"
+
+///|
+#borrow(seq, result)
+extern "C" fn webview_return(
+  w : WebView_t,
+  seq : Bytes,
+  status : Int,
+  result : Bytes,
+) -> Unit = "webview_return"
+
+///|
+/// Returns true when a BindingHandle is null (webview_bind failed).
+extern "C" fn webview_binding_is_null(binding : BindingHandle) -> Bool = "moonbit_is_null"
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+///|
+/// Copy a raw C string (seq/req pointer) into MoonBit-managed Bytes.
+/// This copy is necessary because the C string is only valid for the duration
+/// of the webview callback invocation.
 #borrow(cstr)
 extern "C" fn webview_copy_cstr(cstr : Bytes) -> Bytes = "moonbit_webview_copy_cstr"
 
 ///|
-/// Checks whether a native binding handle is null.
-extern "C" fn webview_binding_is_null(binding : BindingHandle) -> Bool = "moonbit_is_null"
-
-///|
-/// Wrapper around `webview_unbind` that also releases the opaque native
-/// binding handle returned by `webview_bind`.
-#borrow(name)
-pub extern "C" fn webview_unbind(
-  webview : WebView_t,
-  name : Bytes,
-  binding : BindingHandle,
-) -> Int = "moonbit_webview_unbind"
-
-///|
-/// extern void webview_return(webview_t w, const char *seq, int status, const char *result);
-#borrow(seq, result)
-pub extern "C" fn webview_return(
-  webview : WebView_t,
-  seq : Bytes,
-  status : Int,
-  result : Bytes,
-) -> Int = "webview_return"
+/// Returns a stable integer identity for a WebView_t pointer.
+/// Used as a map key for the default PluginHost registry.
+extern "C" fn webview_identity(w : WebView_t) -> Int64 = "moonbit_webview_identity"

@@ -25,7 +25,7 @@ pub(all) enum SizeHint {
 
 ///|
 /// An instance of a webview window.
-/// 
+///
 /// Example:
 ///
 /// ```moonbit nocheck
@@ -43,23 +43,21 @@ struct WebView {
 }
 
 ///|
-/// Creates a new webview instance from a webview handle.
-/// 
+/// Creates a new webview instance.
+///
 /// Parameters:
-/// - `debug` - If set to 1, enables debugging mode which provides additional logging.
+/// - `debug` - If set to 1, enables debugging mode.
 pub fn WebView::new(debug? : Int = 0) -> WebView {
-  let window : Int64 = 0
-  let webview = WebView::{
-    handle: webview_create(debug, window),
+  WebView::{
+    handle: webview_create(debug, 0L),
     bindings: {},
     destroy_hooks: {},
   }
-  webview
 }
 
 ///|
-/// Destroys the webview and closes the window. It is safe to call this
-/// function from another background thread.
+/// Destroys the webview and closes the window.
+/// Safe to call from a background thread.
 pub fn WebView::destroy(self : WebView) -> Unit {
   let hooks : Array[() -> Unit] = []
   for _, hook in self.destroy_hooks {
@@ -70,47 +68,36 @@ pub fn WebView::destroy(self : WebView) -> Unit {
     hook()
   }
   for name, binding in self.bindings {
-    let _ = webview_unbind(self.handle, @encoding/utf8.encode(name), binding)
+    webview_unbind(self.handle, @encoding/utf8.encode(name), binding)
   }
-  let _ = webview_destroy(self.handle)
+  webview_destroy(self.handle)
 }
 
 ///|
 /// Schedules a function to be invoked on the thread with the run/event loop.
-/// 
+///
 /// Since library functions generally do not have thread safety guarantees,
 /// this function can be used to schedule code to execute on the main/GUI
 /// thread and thereby make that execution safe in multi-threaded applications.
-/// 
-/// Parameters:
-/// - `callback` - The function to be invoked.
-/// - `arg` - An optional argument passed along to the callback function.
 pub fn WebView::dispatch(self : WebView, callback : () -> Unit) -> Unit {
-  let _ = webview_dispatch(self.handle, fn(w, f) { f(w) }, callback)
+  webview_dispatch(self.handle, fn(_, f) { f() }, callback)
 }
 
 ///|
-/// Stops the main event loop. It is safe to call this function from another
-/// background thread.
+/// Stops the main event loop.
+/// Safe to call from a background thread.
 pub fn WebView::terminate(self : WebView) -> Unit {
-  let _ = webview_terminate(self.handle)
+  webview_terminate(self.handle)
 }
 
 ///|
-/// Binds a function pointer to a new global JavaScript function.
-/// 
-/// Internally, JS glue code is injected to create the JS function by the
-/// given name. The callback function is passed a request identifier,
-/// a request string and a user-provided argument. The request string is
-/// a JSON array of the arguments passed to the JS function.
-/// 
-/// Parameters:
-/// - `name` - The name of the JavaScript function to bind.
-/// - `callback` - The function to be invoked when the JS function is called.
-/// - `arg` - An optional user-provided argument passed to the callback function.
-/// 
-/// Returns:
-/// - `WEBVIEW_ERROR_DUPLICATE` - A binding already exists with the specified name.
+/// Binds a MoonBit function as a named global JavaScript function.
+///
+/// The injected JS glue creates `window[name]` as an async function. When
+/// called from JavaScript, `callback` receives the call id and a JSON-encoded
+/// argument array. Call `WebView::response` with the id to resolve the promise.
+///
+/// Returns silently if a binding with the same name already exists.
 pub fn WebView::bind(
   self : WebView,
   name : String,
@@ -119,8 +106,8 @@ pub fn WebView::bind(
   let binding = webview_bind(
     self.handle,
     @encoding/utf8.encode(name),
-    (id, req, f) => f(id, req),
-    (raw_id, raw_req) => {
+    fn(raw_id, raw_req, f) { f(raw_id, raw_req) },
+    fn(raw_id, raw_req) {
       let id = webview_copy_cstr(raw_id)
       let req = webview_copy_cstr(raw_req)
       callback(@encoding/utf8.decode(id), @encoding/utf8.decode(req)) catch {
@@ -134,18 +121,12 @@ pub fn WebView::bind(
 }
 
 ///|
-/// Removes a binding created with `webview.bind()`.
-/// 
-/// Parameters:
-/// - `name` - The name of the JavaScript function to unbind.
-/// 
-/// Returns:
-/// - `WEBVIEW_ERROR_NOT_FOUND` - No binding exists with the specified name.
+/// Removes a binding created with `WebView::bind`.
 pub fn WebView::unbind(self : WebView, name : String) -> Unit {
   match self.bindings.get(name) {
     Some(binding) => {
       self.bindings.remove(name)
-      let _ = webview_unbind(self.handle, @encoding/utf8.encode(name), binding)
+      webview_unbind(self.handle, @encoding/utf8.encode(name), binding)
     }
     None => ()
   }
@@ -153,19 +134,13 @@ pub fn WebView::unbind(self : WebView, name : String) -> Unit {
 
 ///|
 /// Updates the title of the native window.
-/// 
-/// Parameters:
-/// - `title` - The new title.
 pub fn WebView::set_title(self : WebView, title : String) -> Unit {
-  let _ = webview_set_title(self.handle, @encoding/utf8.encode(title))
+  webview_set_title(self.handle, @encoding/utf8.encode(title))
 }
 
 ///|
-/// Load HTML content into the webview.
-/// 
-/// Parameters:
-/// - `html` - The HTML content to load.
-/// 
+/// Loads HTML content into the webview.
+///
 /// Example:
 /// ```moonbit nocheck
 /// let webview = @webview.WebView::new()
@@ -174,41 +149,32 @@ pub fn WebView::set_title(self : WebView, title : String) -> Unit {
 /// webview.run()
 /// ```
 pub fn WebView::set_html(self : WebView, html : String) -> Unit {
-  let _ = webview_set_html(self.handle, @encoding/utf8.encode(html))
+  webview_set_html(self.handle, @encoding/utf8.encode(html))
 }
 
 ///|
-/// Navigates webview to the given URL. URL may be a properly encoded data URI.
-/// 
-/// Parameters:
-/// - `url` - The URL to navigate to.
-/// 
+/// Navigates the webview to the given URL. URL may be a data URI.
+///
 /// Example:
 /// ```moonbit nocheck
 /// let webview = @webview.WebView::new()
 /// webview.navigate("https://www.example.com")
-/// webview.navigate("data:text/html,<h1>Hello, World!</h1>")
-/// webview.navigate("data:text/html;base64,PGgxPkhlbGxvPC9oMT4=")
+/// webview.navigate("data:text/html,<h1>Hello</h1>")
 /// webview.dispatch(fn() { webview.terminate() })
 /// webview.run()
 /// ```
 pub fn WebView::navigate(self : WebView, url : String) -> Unit {
-  let _ = webview_navigate(self.handle, @encoding/utf8.encode(url))
+  webview_navigate(self.handle, @encoding/utf8.encode(url))
 }
 
 ///|
-/// Returns the native handle of the window associated with the webview instance.
-/// The handle can be a `GtkWindow` pointer (GTK), `NSWindow` pointer (Cocoa)
-/// or `HWND` (Win32).
+/// Returns the native window handle (`GtkWindow*`, `NSWindow*`, or `HWND`).
 pub fn WebView::get_window(self : WebView) -> Int64 {
   webview_get_window(self.handle)
 }
 
 ///|
-/// Get a native handle of choice.
-/// 
-/// Parameters:
-/// - `kind` - The kind of handle to retrieve.
+/// Returns a native handle of the given kind.
 pub fn WebView::get_native_handle(
   self : WebView,
   kind : NativeHandleKind,
@@ -217,53 +183,39 @@ pub fn WebView::get_native_handle(
 }
 
 ///|
-/// Returns the internal webview handle of the webview instance. This handle is
-/// the raw pointer used by the underlying webview library.
+/// Returns the raw `WebView_t` handle.
 pub fn WebView::get_handle(self : WebView) -> WebView_t {
   self.handle
 }
 
 ///|
 /// Evaluates arbitrary JavaScript code.
-/// 
-/// Use bindings if you need to communicate the result of the evaluation.
-/// 
-/// Parameters:
-/// - `js` - The JavaScript code to evaluate.
+/// Use bindings if you need to receive a result.
 pub fn WebView::eval(self : WebView, js : String) -> Unit {
-  let _ = webview_eval(self.handle, @encoding/utf8.encode(js))
+  webview_eval(self.handle, @encoding/utf8.encode(js))
 }
 
 ///|
-/// Injects JavaScript code to be executed immediately upon loading a page.
-/// The code will be executed before `window.onload`.
-/// 
-/// Parameters:
-/// - `js` - The JavaScript code to inject.
+/// Injects JavaScript code executed immediately on every page load,
+/// before `window.onload`.
 pub fn WebView::init(self : WebView, js : String) -> Unit {
-  let _ = webview_init(self.handle, @encoding/utf8.encode(js))
+  webview_init(self.handle, @encoding/utf8.encode(js))
 }
 
 ///|
-/// Responds to a binding call from the JS side.
-/// 
-/// This function is safe to call from another thread.
-/// 
+/// Responds to a binding call from JavaScript.
+///
 /// Parameters:
-/// - `id` - The identifier of the binding call. Pass along the value received
-///    in the binding handler (see `webview.bind()`).
-/// - `status` - A status of zero tells the JS side that the binding call was
-///    successful; any other value indicates an error.
-/// - `result` - The result of the binding call to be returned to the JS side.
-///    This must either be a valid JSON value or an empty string for
-///    the primitive JS value `undefined`.
+/// - `id`     - The call identifier received in the binding callback.
+/// - `status` - 0 for success; any other value signals an error to JS.
+/// - `result` - A JSON value or empty string (resolves to `undefined`).
 pub fn WebView::response(
   self : WebView,
   id : String,
   status : Int,
   result : String,
 ) -> Unit {
-  let _ = webview_return(
+  webview_return(
     self.handle,
     @encoding/utf8.encode(id),
     status,
@@ -273,35 +225,27 @@ pub fn WebView::response(
 
 ///|
 /// Updates the size of the native window.
-/// 
+///
 /// Remarks:
-/// - Using `WEBVIEW_HINT_MAX` for setting the maximum window size is not
-///   supported with GTK 4 because X11-specific functions such as
-///   `gtk_window_set_geometry_hints` were removed. This option has no effect
-///   when using GTK 4.
-/// - GTK 4 can set a default/initial window size if done early enough;
-///   otherwise, this function has no effect. GTK 4 (unlike 3) can't resize
-///   a window after it has been set up.
-/// 
-/// Parameters:
-/// - `width` - The new width of the window.
-/// - `height` - The new height of the window.
-/// - `hints` - Hints for the window size.
+/// - `SizeHint::Max` is not supported with GTK 4.
+/// - GTK 4 can only set a default size early in the window lifecycle.
 pub fn WebView::set_size(
   self : WebView,
   width : Int,
   height : Int,
   hints : SizeHint,
 ) -> Unit {
-  let _ = webview_set_size(self.handle, width, height, hints)
+  webview_set_size(self.handle, width, height, hints)
 }
 
 ///|
-/// Runs the main loop until it's terminated.
+/// Runs the main event loop until terminated, then destroys the webview.
 pub fn WebView::run(self : WebView) -> Unit {
-  let _ = webview_run(self.handle)
+  webview_run(self.handle)
   self.destroy()
 }
+
+// ── Internal helpers ─────────────────────────────────────────────────────────
 
 ///|
 fn WebView::identity(self : WebView) -> Int64 {
@@ -315,9 +259,7 @@ fn WebView::register_destroy_hook(
   hook : () -> Unit,
 ) -> Unit {
   guard self.destroy_hooks.get(hook_name) is None else {
-    abort(
-      "WebView::register_destroy_hook: hook already registered: " + hook_name,
-    )
+    abort("WebView::register_destroy_hook: hook already registered: " + hook_name)
   }
   self.destroy_hooks.set(hook_name, hook)
 }
