@@ -36,10 +36,12 @@ pub(all) enum SizeHint {
 /// webview.dispatch(fn() { webview.terminate() })
 /// webview.run()
 /// ```
-struct WebView {
+struct WebView[X] {
   handle : WebView_t
   bindings : Map[String, BindingHandle]
   destroy_hooks : Map[String, () -> Unit]
+  task_group : @async.TaskGroup[X]
+  mut default_plugin_host : PluginHost[X]?
 }
 
 // ── Internal logging ──────────────────────────────────────────────────────────
@@ -80,7 +82,10 @@ pub fn log(level : Int, msg : String) -> Unit {
 ///
 /// Parameters:
 /// - `debug` - If set to 1, enables debugging mode and internal logging.
-pub fn WebView::new(debug? : Int = 0) -> WebView {
+pub fn[X] WebView::new(
+  task_group : @async.TaskGroup[X],
+  debug? : Int = 0,
+) -> WebView[X] {
   if debug > 0 {
     set_log_level(debug)
   }
@@ -88,13 +93,15 @@ pub fn WebView::new(debug? : Int = 0) -> WebView {
     handle: webview_create(debug, 0L),
     bindings: {},
     destroy_hooks: {},
+    task_group,
+    default_plugin_host: None,
   }
 }
 
 ///|
 /// Destroys the webview and closes the window.
 /// Safe to call from a background thread.
-pub fn WebView::destroy(self : WebView) -> Unit {
+pub fn[X] WebView::destroy(self : WebView[X]) -> Unit {
   let hooks : Array[() -> Unit] = []
   for _, hook in self.destroy_hooks {
     hooks.push(hook)
@@ -115,15 +122,15 @@ pub fn WebView::destroy(self : WebView) -> Unit {
 /// Since library functions generally do not have thread safety guarantees,
 /// this function can be used to schedule code to execute on the main/GUI
 /// thread and thereby make that execution safe in multi-threaded applications.
-pub fn WebView::dispatch(self : WebView, callback : () -> Unit) -> Unit {
+pub fn[X] WebView::dispatch(self : WebView[X], callback : () -> Unit) -> Unit {
   webview_dispatch(self.handle, fn(_, f) { f() }, callback)
 }
 
 ///|
 /// Stops the main event loop.
 /// Safe to call from a background thread.
-pub fn WebView::terminate(self : WebView) -> Unit {
-  webview_terminate(self.handle)
+pub fn[X] WebView::terminate(self : WebView[X]) -> Unit {
+  webview_terminate(self.handle) // moonbit_webview_terminate — also sets terminated flag
 }
 
 ///|
@@ -134,8 +141,8 @@ pub fn WebView::terminate(self : WebView) -> Unit {
 /// argument array. Call `WebView::response` with the id to resolve the promise.
 ///
 /// Returns silently if a binding with the same name already exists.
-pub fn WebView::bind(
-  self : WebView,
+pub fn[X] WebView::bind(
+  self : WebView[X],
   name : String,
   callback : (String, String) -> Unit,
 ) -> Unit {
@@ -154,8 +161,8 @@ pub fn WebView::bind(
 ///
 /// `raw_id` and `raw_req` are valid only for the duration of the callback.
 /// Use `WebView::respond_raw` to reply without copying the id into a String.
-fn WebView::bind_raw(
-  self : WebView,
+fn[X] WebView::bind_raw(
+  self : WebView[X],
   name : String,
   callback : (Bytes, Bytes) -> Unit,
 ) -> Unit {
@@ -172,7 +179,7 @@ fn WebView::bind_raw(
 
 ///|
 /// Removes a binding created with `WebView::bind`.
-pub fn WebView::unbind(self : WebView, name : String) -> Unit {
+pub fn[X] WebView::unbind(self : WebView[X], name : String) -> Unit {
   match self.bindings.get(name) {
     Some(binding) => {
       self.bindings.remove(name)
@@ -184,7 +191,7 @@ pub fn WebView::unbind(self : WebView, name : String) -> Unit {
 
 ///|
 /// Updates the title of the native window.
-pub fn WebView::set_title(self : WebView, title : String) -> Unit {
+pub fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
   webview_set_title(self.handle, @encoding/utf8.encode(title))
 }
 
@@ -198,7 +205,7 @@ pub fn WebView::set_title(self : WebView, title : String) -> Unit {
 /// webview.dispatch(fn() { webview.terminate() })
 /// webview.run()
 /// ```
-pub fn WebView::set_html(self : WebView, html : String) -> Unit {
+pub fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
   webview_set_html(self.handle, @encoding/utf8.encode(html))
 }
 
@@ -213,20 +220,20 @@ pub fn WebView::set_html(self : WebView, html : String) -> Unit {
 /// webview.dispatch(fn() { webview.terminate() })
 /// webview.run()
 /// ```
-pub fn WebView::navigate(self : WebView, url : String) -> Unit {
+pub fn[X] WebView::navigate(self : WebView[X], url : String) -> Unit {
   webview_navigate(self.handle, @encoding/utf8.encode(url))
 }
 
 ///|
 /// Returns the native window handle (`GtkWindow*`, `NSWindow*`, or `HWND`).
-pub fn WebView::get_window(self : WebView) -> Int64 {
+pub fn[X] WebView::get_window(self : WebView[X]) -> Int64 {
   webview_get_window(self.handle)
 }
 
 ///|
 /// Returns a native handle of the given kind.
-pub fn WebView::get_native_handle(
-  self : WebView,
+pub fn[X] WebView::get_native_handle(
+  self : WebView[X],
   kind : NativeHandleKind,
 ) -> Int64 {
   webview_get_native_handle(self.handle, kind)
@@ -234,21 +241,21 @@ pub fn WebView::get_native_handle(
 
 ///|
 /// Returns the raw `WebView_t` handle.
-pub fn WebView::get_handle(self : WebView) -> WebView_t {
+pub fn[X] WebView::get_handle(self : WebView[X]) -> WebView_t {
   self.handle
 }
 
 ///|
 /// Evaluates arbitrary JavaScript code.
 /// Use bindings if you need to receive a result.
-pub fn WebView::eval(self : WebView, js : String) -> Unit {
+pub fn[X] WebView::eval(self : WebView[X], js : String) -> Unit {
   webview_eval(self.handle, @encoding/utf8.encode(js))
 }
 
 ///|
 /// Injects JavaScript code executed immediately on every page load,
 /// before `window.onload`.
-pub fn WebView::init(self : WebView, js : String) -> Unit {
+pub fn[X] WebView::init(self : WebView[X], js : String) -> Unit {
   webview_init(self.handle, @encoding/utf8.encode(js))
 }
 
@@ -262,8 +269,8 @@ pub fn WebView::init(self : WebView, js : String) -> Unit {
 /// - `id`     - The call identifier received in the binding callback.
 /// - `status` - 0 for success; any other value signals an error to JS.
 /// - `result` - A JSON value or empty string (resolves to `undefined`).
-pub fn WebView::response(
-  self : WebView,
+pub fn[X] WebView::response(
+  self : WebView[X],
   id : String,
   status : Int,
   result : String,
@@ -287,8 +294,8 @@ pub fn WebView::response(
 /// `status` must match the wire frame: 0 for success, 1 for error.
 /// JS only inspects `result` — `status` tells the webview engine whether to
 /// resolve or reject the Promise before `result` is even parsed.
-fn WebView::respond_raw(
-  self : WebView,
+fn[X] WebView::respond_raw(
+  self : WebView[X],
   raw_id : Bytes,
   status : Int,
   result : Bytes,
@@ -302,8 +309,8 @@ fn WebView::respond_raw(
 /// Remarks:
 /// - `SizeHint::Max` is not supported with GTK 4.
 /// - GTK 4 can only set a default size early in the window lifecycle.
-pub fn WebView::set_size(
-  self : WebView,
+pub fn[X] WebView::set_size(
+  self : WebView[X],
   width : Int,
   height : Int,
   hints : SizeHint,
@@ -313,21 +320,22 @@ pub fn WebView::set_size(
 
 ///|
 /// Runs the main event loop until terminated, then destroys the webview.
-pub fn WebView::run(self : WebView) -> Unit {
-  webview_run(self.handle)
-  self.destroy()
+///
+/// In a plain `fn main` context, use this synchronous overload.
+/// In an `async fn main` context, prefer `run_async` which integrates with
+/// `moonbitlang/async` and automatically drives any registered async handlers.
+pub fn[X] WebView::run(self : WebView[X]) -> Unit {
+  self.task_group.spawn_bg(() => {
+    webview_run(self.handle)
+    self.destroy()
+  })
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 ///|
-fn WebView::identity(self : WebView) -> Int64 {
-  webview_identity(self.handle)
-}
-
-///|
-fn WebView::register_destroy_hook(
-  self : WebView,
+fn[X] WebView::register_destroy_hook(
+  self : WebView[X],
   hook_name : String,
   hook : () -> Unit,
 ) -> Unit {
@@ -340,6 +348,9 @@ fn WebView::register_destroy_hook(
 }
 
 ///|
-fn WebView::unregister_destroy_hook(self : WebView, hook_name : String) -> Unit {
+fn[X] WebView::unregister_destroy_hook(
+  self : WebView[X],
+  hook_name : String,
+) -> Unit {
   self.destroy_hooks.remove(hook_name)
 }

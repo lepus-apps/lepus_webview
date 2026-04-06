@@ -21,8 +21,11 @@ pub fn CommandBridge::destroy(Self) -> Unit
 pub fn CommandBridge::event_name(Self) -> String
 pub fn CommandBridge::global_name(Self) -> String
 pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle(Self, String, (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_async(Self, String, async (Payload) -> Reply) -> Unit
 pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result(Self, String, (Payload) -> Reply raise) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_async(Self, String, async (Payload) -> Reply) -> Unit
 pub fn CommandBridge::new(WebView, global_name? : String, binding_name? : String, event_name? : String) -> Self
+pub async fn CommandBridge::run_async_handlers(Self) -> Unit
 pub fn[Payload : ToJson] CommandBridge::send(Self, String, Payload) -> Unit
 
 pub(all) enum CommandResponse {
@@ -44,7 +47,9 @@ pub fn Plugin::new(String, (PluginContext) -> Unit, on_install? : (PluginContext
 
 type PluginContext
 pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command(Self, String, (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command_async(Self, String, async (Payload) -> Reply) -> Unit
 pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result(Self, String, (Payload) -> Reply raise) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result_async(Self, String, async (Payload) -> Reply) -> Unit
 pub fn[Payload : ToJson] PluginContext::emit(Self, String, Payload) -> Unit
 pub fn PluginContext::global_name(Self) -> String
 pub fn PluginContext::install_script(Self, String) -> Unit
@@ -76,6 +81,7 @@ type WebView
 pub fn WebView::bind(Self, String, (String, String) -> Unit) -> Unit
 pub fn WebView::destroy(Self) -> Unit
 pub fn WebView::dispatch(Self, () -> Unit) -> Unit
+pub async fn WebView::dispatch_async(Self, () -> Unit) -> Unit
 pub fn[Payload : ToJson] WebView::emit_plugin(Self, String, String, Payload) -> Unit
 pub fn WebView::eval(Self, String) -> Unit
 pub fn WebView::get_handle(Self) -> WebView_t
@@ -88,6 +94,7 @@ pub fn WebView::new(debug? : Int) -> Self
 pub fn WebView::plugin_host(Self) -> PluginHost
 pub fn WebView::response(Self, String, Int, String) -> Unit
 pub fn WebView::run(Self) -> Unit
+pub async fn WebView::run_async(Self) -> Unit
 pub fn WebView::set_html(Self, String) -> Unit
 pub fn WebView::set_size(Self, Int, Int, SizeHint) -> Unit
 pub fn WebView::set_title(Self, String) -> Unit

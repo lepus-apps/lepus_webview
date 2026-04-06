@@ -1,7 +1,4 @@
 ///|
-let default_plugin_hosts : Map[Int64, PluginHost] = {}
-
-///|
 /// A plugin definition that can be installed into a `WebView` or `PluginHost`.
 ///
 /// A plugin is typically exposed from a MoonBit module:
@@ -19,11 +16,11 @@ let default_plugin_hosts : Map[Int64, PluginHost] = {}
 /// `on_install` runs after the plugin has finished registering commands and
 /// JS helpers on the host. `on_destroy` runs when the owning webview/plugin
 /// host is destroyed, before the underlying `CommandBridge` is torn down.
-struct Plugin {
+struct Plugin[X] {
   name : String
-  register : (PluginContext) -> Unit
-  on_install : (PluginContext) -> Unit
-  on_destroy : (PluginContext) -> Unit
+  register : (PluginContext[X]) -> Unit
+  on_install : (PluginContext[X]) -> Unit
+  on_destroy : (PluginContext[X]) -> Unit
 }
 
 ///|
@@ -43,21 +40,21 @@ struct Plugin {
 /// These JS APIs forward to MoonBit through `CommandBridge::handle(...)`.
 /// Plugin events are forwarded from MoonBit to JavaScript through the same
 /// bridge and delivered as `PluginEvent`.
-struct PluginHost {
-  webview : WebView
-  bridge : CommandBridge
+struct PluginHost[X] {
+  webview : WebView[X]
+  bridge : CommandBridge[X]
   global_name : String
   plugins : Map[String, Bool]
   apis : Map[String, Bool]
   destroy_hooks : Map[String, () -> Unit]
   destroy_hook_name : String
-  default_registry_key : Int64?
+  is_default : Bool
 }
 
 ///|
 /// Registration context handed to a plugin while it installs its public APIs.
-struct PluginContext {
-  host : PluginHost
+struct PluginContext[X] {
+  host : PluginHost[X]
   plugin_name : String
 }
 
@@ -72,12 +69,12 @@ pub struct PluginEvent {
 ///|
 /// Builds a plugin value that can later be installed on a `WebView` or
 /// `PluginHost`.
-pub fn Plugin::new(
+pub fn[X] Plugin::new(
   name : String,
-  register : (PluginContext) -> Unit,
-  on_install? : (PluginContext) -> Unit = fn(_context) {  },
-  on_destroy? : (PluginContext) -> Unit = fn(_context) {  },
-) -> Plugin {
+  register : (PluginContext[X]) -> Unit,
+  on_install? : (PluginContext[X]) -> Unit = fn(_context) {  },
+  on_destroy? : (PluginContext[X]) -> Unit = fn(_context) {  },
+) -> Plugin[X] {
   Plugin::{ name, register, on_install, on_destroy }
 }
 
@@ -92,13 +89,13 @@ pub fn Plugin::new(
 ///
 /// `command_global_name`, `binding_name`, and `event_name` are passed through
 /// to the underlying `CommandBridge`.
-pub fn PluginHost::new(
-  webview : WebView,
+pub fn[X] PluginHost::new(
+  webview : WebView[X],
   global_name? : String = "MoonBitPlugins",
   command_global_name? : String = "MoonBitBridge",
   binding_name? : String = "__moonbit_command",
   event_name? : String = "moonbit:command",
-) -> PluginHost {
+) -> PluginHost[X] {
   make_plugin_host(
     webview,
     global_name~,
@@ -113,13 +110,12 @@ pub fn PluginHost::new(
 ///
 /// The host is created lazily and reused by `webview.install_plugin(...)` and
 /// `webview.emit_plugin(...)`.
-pub fn WebView::plugin_host(self : WebView) -> PluginHost {
-  let key = self.plugin_host_registry_key()
-  match default_plugin_hosts.get(key) {
+pub fn[X] WebView::plugin_host(self : WebView[X]) -> PluginHost[X] {
+  match self.default_plugin_host {
     Some(host) => host
     None => {
-      let host = make_plugin_host(self, default_registry_key=Some(key))
-      default_plugin_hosts.set(key, host)
+      let host = make_plugin_host(self, is_default=true)
+      self.default_plugin_host = Some(host)
       host
     }
   }
@@ -127,15 +123,18 @@ pub fn WebView::plugin_host(self : WebView) -> PluginHost {
 
 ///|
 /// Installs a plugin into the webview's default plugin host.
-pub fn WebView::install_plugin(self : WebView, plugin : Plugin) -> Unit {
+pub fn[X] WebView::install_plugin(
+  self : WebView[X],
+  plugin : Plugin[X],
+) -> Unit {
   self.plugin_host().install(plugin)
 }
 
 ///|
 /// Emits a plugin-scoped event from the main program through the webview's
 /// default plugin host.
-pub fn[Payload : ToJson] WebView::emit_plugin(
-  self : WebView,
+pub fn[X, Payload : ToJson] WebView::emit_plugin(
+  self : WebView[X],
   plugin_name : String,
   event_name : String,
   payload : Payload,
@@ -144,14 +143,14 @@ pub fn[Payload : ToJson] WebView::emit_plugin(
 }
 
 ///|
-fn make_plugin_host(
-  webview : WebView,
+fn[X] make_plugin_host(
+  webview : WebView[X],
   global_name? : String = "MoonBitPlugins",
   command_global_name? : String = "MoonBitBridge",
   binding_name? : String = "__moonbit_command",
   event_name? : String = "moonbit:command",
-  default_registry_key? : Int64? = None,
-) -> PluginHost {
+  is_default? : Bool = false,
+) -> PluginHost[X] {
   let destroy_hook_name = plugin_host_destroy_hook_name(
     global_name, binding_name,
   )
@@ -168,7 +167,7 @@ fn make_plugin_host(
     apis: {},
     destroy_hooks: {},
     destroy_hook_name,
-    default_registry_key,
+    is_default,
   }
   webview.register_destroy_hook(destroy_hook_name, fn() { host.destroy() })
   host.install_script(make_plugin_host_script(global_name, command_global_name))
@@ -177,13 +176,13 @@ fn make_plugin_host(
 
 ///|
 /// Returns the JavaScript global object name used for plugin APIs.
-pub fn PluginHost::global_name(self : PluginHost) -> String {
+pub fn[X] PluginHost::global_name(self : PluginHost[X]) -> String {
   self.global_name
 }
 
 ///|
 /// Returns the underlying command bridge used by the plugin host.
-pub fn PluginHost::command_bridge(self : PluginHost) -> CommandBridge {
+pub fn[X] PluginHost::command_bridge(self : PluginHost[X]) -> CommandBridge[X] {
   self.bridge
 }
 
@@ -192,7 +191,7 @@ pub fn PluginHost::command_bridge(self : PluginHost) -> CommandBridge {
 ///
 /// This aborts if another plugin with the same name has already been
 /// installed on this host.
-pub fn PluginHost::install(self : PluginHost, plugin : Plugin) -> Unit {
+pub fn[X] PluginHost::install(self : PluginHost[X], plugin : Plugin[X]) -> Unit {
   guard !is_reserved_plugin_name(plugin.name) else {
     abort("PluginHost::install: reserved plugin name: " + plugin.name)
   }
@@ -212,7 +211,7 @@ pub fn PluginHost::install(self : PluginHost, plugin : Plugin) -> Unit {
 ///|
 /// Drops all registered plugin metadata and destroys the underlying
 /// `CommandBridge`.
-pub fn PluginHost::destroy(self : PluginHost) -> Unit {
+pub fn[X] PluginHost::destroy(self : PluginHost[X]) -> Unit {
   self.unregister_default_host()
   self.webview.unregister_destroy_hook(self.destroy_hook_name)
   for _, hook in self.destroy_hooks {
@@ -230,19 +229,19 @@ pub fn PluginHost::destroy(self : PluginHost) -> Unit {
 /// `PluginHost` cleanup is already attached to the underlying `WebView`
 /// lifecycle, so `webview.run()` and `plugins.run()` are equivalent. Prefer
 /// `webview.run()` in normal application code.
-pub fn PluginHost::run(self : PluginHost) -> Unit {
+pub fn[X] PluginHost::run(self : PluginHost[X]) -> Unit {
   self.webview.run()
 }
 
 ///|
 /// Returns the plugin name currently being installed.
-pub fn PluginContext::name(self : PluginContext) -> String {
+pub fn[X] PluginContext::name(self : PluginContext[X]) -> String {
   self.plugin_name
 }
 
 ///|
 /// Returns the JavaScript global object name used by the owning plugin host.
-pub fn PluginContext::global_name(self : PluginContext) -> String {
+pub fn[X] PluginContext::global_name(self : PluginContext[X]) -> String {
   self.host.global_name
 }
 
@@ -251,8 +250,8 @@ pub fn PluginContext::global_name(self : PluginContext) -> String {
 ///
 /// This is useful for plugins that expose browser-side helpers directly instead
 /// of routing every call through MoonBit command handlers.
-pub fn PluginContext::install_script(
-  self : PluginContext,
+pub fn[X] PluginContext::install_script(
+  self : PluginContext[X],
   script : String,
 ) -> Unit {
   self.host.install_script(script)
@@ -267,8 +266,8 @@ pub fn PluginContext::install_script(
 ///
 /// For the default host attached to a `WebView`, prefer
 /// `webview.emit_plugin(...)`.
-pub fn[Payload : ToJson] PluginHost::emit(
-  self : PluginHost,
+pub fn[X, Payload : ToJson] PluginHost::emit(
+  self : PluginHost[X],
   plugin_name : String,
   event_name : String,
   payload : Payload,
@@ -287,8 +286,8 @@ pub fn[Payload : ToJson] PluginHost::emit(
 /// Emits a plugin-scoped event to JavaScript.
 ///
 /// This is safe to call from command handlers or lifecycle hooks.
-pub fn[Payload : ToJson] PluginContext::emit(
-  self : PluginContext,
+pub fn[X, Payload : ToJson] PluginContext::emit(
+  self : PluginContext[X],
   event_name : String,
   payload : Payload,
 ) -> Unit {
@@ -300,8 +299,8 @@ pub fn[Payload : ToJson] PluginContext::emit(
 ///
 /// The command becomes callable from JavaScript through:
 /// `window.MoonBitPlugins[plugin_name][api_name](payload)`.
-pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command(
-  self : PluginContext,
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command(
+  self : PluginContext[X],
   api_name : String,
   callback : (Payload) -> Reply,
 ) -> Unit {
@@ -312,8 +311,8 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command(
 
 ///|
 /// Registers a typed plugin command that can return explicit command errors.
-pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result(
-  self : PluginContext,
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result(
+  self : PluginContext[X],
   api_name : String,
   callback : (Payload) -> Reply raise Error,
 ) -> Unit {
@@ -323,8 +322,43 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result(
 }
 
 ///|
-fn PluginContext::register_api(
-  self : PluginContext,
+/// Registers an **async** typed plugin command.
+///
+/// The callback is spawned as a `moonbitlang/async` coroutine, so it can
+/// freely `await` IO operations.  The JS-side Promise stays pending until
+/// the coroutine completes.
+///
+/// Example:
+/// ```moonbit nocheck
+/// plugin.command_async("read_file", async fn(req : ReadRequest) -> String {
+///   @fs.read_to_string(req.path)   // awaits IO
+/// })
+/// ```
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_async(
+  self : PluginContext[X],
+  api_name : String,
+  callback : async (Payload) -> Reply,
+) -> Unit {
+  self.install_command_api(api_name, command_name => {
+    self.host.bridge.handle_async(command_name, callback)
+  })
+}
+
+///|
+/// Registers an **async** typed plugin command that can raise errors.
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result_async(
+  self : PluginContext[X],
+  api_name : String,
+  callback : async (Payload) -> Reply raise Error,
+) -> Unit {
+  self.install_command_api(api_name, command_name => {
+    self.host.bridge.handle_result_async(command_name, callback)
+  })
+}
+
+///|
+fn[X] PluginContext::register_api(
+  self : PluginContext[X],
   api_name : String,
 ) -> String {
   guard !is_reserved_api_name(api_name) else {
@@ -349,8 +383,8 @@ fn PluginContext::register_api(
 }
 
 ///|
-fn PluginContext::install_command_api(
-  self : PluginContext,
+fn[X] PluginContext::install_command_api(
+  self : PluginContext[X],
   api_name : String,
   register : (String) -> Unit,
 ) -> Unit {
@@ -369,20 +403,15 @@ fn PluginContext::install_command_api(
 }
 
 ///|
-fn PluginHost::install_script(self : PluginHost, script : String) -> Unit {
+fn[X] PluginHost::install_script(self : PluginHost[X], script : String) -> Unit {
   self.webview.init(script)
   self.webview.dispatch(fn() { self.webview.eval(script) })
 }
 
 ///|
-fn WebView::plugin_host_registry_key(self : WebView) -> Int64 {
-  self.identity()
-}
-
-///|
-fn PluginHost::unregister_default_host(self : PluginHost) -> Unit {
-  if self.default_registry_key is Some(key) {
-    default_plugin_hosts.remove(key)
+fn[X] PluginHost::unregister_default_host(self : PluginHost[X]) -> Unit {
+  if self.is_default {
+    self.webview.default_plugin_host = None
   }
 }
 

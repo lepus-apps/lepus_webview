@@ -1,6 +1,7 @@
 import {
   "moonbitlang/core/json",
   "moonbitlang/core/encoding/utf8" @encoding/utf8,
+  "moonbitlang/async" @async,
 }
 
 supported_targets = "+native"

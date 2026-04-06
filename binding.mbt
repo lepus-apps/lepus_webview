@@ -33,7 +33,10 @@ extern "C" fn webview_destroy(w : WebView_t) -> Unit = "webview_destroy"
 extern "C" fn webview_run(w : WebView_t) -> Unit = "webview_run"
 
 ///|
-extern "C" fn webview_terminate(w : WebView_t) -> Unit = "webview_terminate"
+/// Wraps webview_terminate and also sets the internal terminated flag so
+/// `webview_is_terminated()` returns true.  Use this instead of the bare
+/// `webview_terminate` so that the async run-loop can observe termination.
+extern "C" fn webview_terminate(w : WebView_t) -> Unit = "moonbit_webview_terminate"
 
 // ── Window ───────────────────────────────────────────────────────────────────
 
@@ -141,8 +144,3 @@ extern "C" fn webview_binding_is_null(binding : BindingHandle) -> Bool = "moonbi
 /// of the webview callback invocation.
 #borrow(cstr)
 extern "C" fn webview_copy_cstr(cstr : Bytes) -> Bytes = "moonbit_webview_copy_cstr"
-
-///|
-/// Returns a stable integer identity for a WebView_t pointer.
-/// Used as a map key for the default PluginHost registry.
-extern "C" fn webview_identity(w : WebView_t) -> Int64 = "moonbit_webview_identity"

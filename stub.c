@@ -104,10 +104,10 @@ void moonbit_webview_return_raw(
 
 /* ── Misc helpers ────────────────────────────────────────────────────────── */
 
-MOONBIT_FFI_EXPORT
-int64_t moonbit_webview_identity(webview_t w) {
-  return (int64_t)(intptr_t)w;
-}
+// MOONBIT_FFI_EXPORT
+// int64_t moonbit_webview_identity(webview_t w) {
+//   return (int64_t)(intptr_t)w;
+// }
 
 /*
  * Copy a null-terminated C string into a MoonBit Bytes value.

@@ -65,22 +65,26 @@ fn CommandResponse::to_wire(self : CommandResponse) -> Bytes {
 /// JS API:
 /// - `window[global_name].send(name, payload)` → `Promise<[0,result]|[1,msg]>`
 /// - `window[global_name].onCommand(listener)` for MoonBit → JS push events
-struct CommandBridge {
-  webview : WebView
+struct CommandBridge[X] {
+  webview : WebView[X]
   global_name : String
   binding_name : String
   event_name : String
+  // Sync handlers: called in-line, must return immediately.
   handlers : Map[String, (Json) -> CommandResponse]
+  // Async handlers: run inline via async_run_inline.
+  // Stored as (id_bytes, payload) -> Unit closures that call respond_raw themselves.
+  async_handlers : Map[String, async (Bytes, Json) -> Unit]
 }
 
 ///|
 /// Creates and installs a command bridge for the given webview.
-pub fn CommandBridge::new(
-  webview : WebView,
+pub fn[X] CommandBridge::new(
+  webview : WebView[X],
   global_name? : String = "MoonBitBridge",
   binding_name? : String = "__moonbit_command",
   event_name? : String = "moonbit:command",
-) -> CommandBridge {
+) -> CommandBridge[X] {
   guard webview.bindings.get(binding_name) is None else {
     abort("CommandBridge::new: binding name already in use: " + binding_name)
   }
@@ -90,55 +94,57 @@ pub fn CommandBridge::new(
     binding_name,
     event_name,
     handlers: {},
+    async_handlers: {},
   }
-  // bind_raw: seq arrives as borrowed Bytes and is passed straight to
-  // webview_return_raw — no copy, no UTF-8 decode/encode of the call-id.
-  bridge.webview.bind_raw(binding_name, fn(raw_id, raw_req) {
-    bridge.dispatch(raw_id, raw_req)
+  bridge.webview.bind_raw(binding_name, (raw_id, raw_req) => {
+    webview.task_group.spawn_bg(() => bridge.dispatch(raw_id, raw_req))
   })
   bridge.webview.init(make_bridge_script(global_name, binding_name, event_name))
   bridge
 }
 
 ///|
-pub fn CommandBridge::global_name(self : CommandBridge) -> String {
+pub fn[X] CommandBridge::global_name(self : CommandBridge[X]) -> String {
   self.global_name
 }
 
 ///|
-pub fn CommandBridge::event_name(self : CommandBridge) -> String {
+pub fn[X] CommandBridge::event_name(self : CommandBridge[X]) -> String {
   self.event_name
 }
 
 ///|
-pub fn CommandBridge::destroy(self : CommandBridge) -> Unit {
+pub fn[X] CommandBridge::destroy(self : CommandBridge[X]) -> Unit {
   self.handlers.clear()
+  self.async_handlers.clear()
   self.webview.unbind(self.binding_name)
 }
 
 ///|
-/// Registers a typed command handler.
-pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle(
-  self : CommandBridge,
+/// Registers a synchronous typed command handler.
+///
+/// The callback is called directly on the webview thread during dispatch.
+/// For IO-bound or slow work use `handle_async` / `handle_result_async`.
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle(
+  self : CommandBridge[X],
   name : String,
   callback : (Payload) -> Reply,
 ) -> Unit {
   self.handlers.set(name, fn(json) {
-    match (try? @json.from_json(json) : Result[Payload, _]) {
-      Ok(p) => CommandResponse::ok(callback(p))
-      Err(err) => CommandResponse::error(err.to_string())
+    CommandResponse::ok(callback(@json.from_json(json))) catch {
+      err => CommandResponse::error(err.to_string())
     }
   })
 }
 
 ///|
-/// Registers a typed command handler that can raise errors.
-pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result(
-  self : CommandBridge,
+/// Registers a synchronous typed command handler that can raise errors.
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result(
+  self : CommandBridge[X],
   name : String,
   callback : (Payload) -> Reply raise Error,
 ) -> Unit {
-  self.handlers.set(name, fn(json) {
+  self.handlers.set(name, json => {
     CommandResponse::ok(callback(@json.from_json(json))) catch {
       msg => CommandResponse::error("\{msg}")
     }
@@ -146,10 +152,70 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result(
 }
 
 ///|
+/// Registers an **async** typed command handler.
+///
+/// The callback is spawned as a `moonbitlang/async` coroutine, so it can
+/// freely `await` IO operations (timers, file reads, HTTP requests, …).
+/// The JS-side Promise stays pending until the coroutine completes.
+///
+/// Example:
+/// ```moonbit nocheck
+/// bridge.handle_async("fetch_file", async fn(req : FileRequest) -> String {
+///   let data = @fs.read_to_string(req.path)   // awaits IO
+///   data
+/// })
+/// ```
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_async(
+  self : CommandBridge[X],
+  name : String,
+  callback : async (Payload) -> Reply,
+) -> Unit {
+  self.async_handlers.set(name, async fn(id_bytes, json) {
+    let resp : CommandResponse = match
+      (try? @json.from_json(json) : Result[Payload, _]) {
+      Ok(p) => CommandResponse::ok(callback(p))
+      Err(err) => CommandResponse::error(err.to_string())
+    }
+    let wire = resp.to_wire()
+    let status = match resp {
+      Ok(_) => 0
+      Error(_) => 1
+    }
+    log(1, "[bridge:async] responding status=\{status}")
+    self.webview.respond_raw(id_bytes, status, wire)
+  })
+}
+
+///|
+/// Registers an **async** typed command handler that can raise errors.
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_async(
+  self : CommandBridge[X],
+  name : String,
+  callback : async (Payload) -> Reply raise Error,
+) -> Unit {
+  self.async_handlers.set(name, (id_bytes, json) => {
+    self.webview.task_group.spawn_bg(() => {
+      let resp : CommandResponse = CommandResponse::ok(
+        callback(@json.from_json(json)),
+      ) catch {
+        msg => CommandResponse::error("\{msg}")
+      }
+      let wire = resp.to_wire()
+      let status = match resp {
+        Ok(_) => 0
+        Error(_) => 1
+      }
+      log(1, "[bridge:async] responding status=\{status}")
+      self.webview.respond_raw(id_bytes, status, wire)
+    })
+  })
+}
+
+///|
 /// Pushes a fire-and-forget event to JavaScript.
 /// JS listener receives `[name, payload]`.
-pub fn[Payload : ToJson] CommandBridge::send(
-  self : CommandBridge,
+pub fn[X, Payload : ToJson] CommandBridge::send(
+  self : CommandBridge[X],
   name : String,
   payload : Payload,
 ) -> Unit {
@@ -159,7 +225,7 @@ pub fn[Payload : ToJson] CommandBridge::send(
     Json::string(name).stringify(),
     ToJson::to_json(payload).stringify(),
   )
-  self.webview.dispatch(fn() { self.webview.eval(script) })
+  self.webview.dispatch(() => self.webview.eval(script))
 }
 
 // ── Internal ──────────────────────────────────────────────────────────────────
@@ -169,15 +235,15 @@ pub fn[Payload : ToJson] CommandBridge::send(
 ///
 /// Returns `CommandResponse` without touching any FFI — fully testable.
 /// Input format: `'["<name>", <payload>]'`
-fn CommandBridge::dispatch_req(
-  self : CommandBridge,
+fn[X] CommandBridge::dispatch_req(
+  self : CommandBridge[X],
   req_str : String,
 ) -> CommandResponse {
   log(
     1,
     "[bridge:dispatch_req] req=\{req_str} handlers=\{self.handlers.length()}",
   )
-  let resp = try {
+  try {
     match (@json.parse(req_str) : Json) {
       [String(name), payload] => {
         log(1, "[bridge:dispatch_req] name=\{name}")
@@ -204,34 +270,66 @@ fn CommandBridge::dispatch_req(
       CommandResponse::error("JSON parse error: \{e}")
     }
   }
-  resp
 }
 
 ///|
-/// Hot path: decode raw bytes, call `dispatch_req`, send wire response.
+/// Hot path: decode raw bytes, route to handler, send wire response.
 ///
-/// raw_id is borrowed for the lifetime of this call; it goes straight to
-/// webview_return_raw without ever entering MoonBit's string/UTF-8 system.
-fn CommandBridge::dispatch(
-  self : CommandBridge,
+/// Sync handlers are called in-line and their response sent immediately.
+/// Async handlers are spawned as a coroutine; when the coroutine resolves
+/// the response is delivered via `webview.dispatch` back to the webview
+/// thread and sent with `respond_raw`.
+async fn[X] CommandBridge::dispatch(
+  self : CommandBridge[X],
   raw_id : Bytes,
   raw_req : Bytes,
-) -> Unit {
+) -> Unit noraise {
   log(1, "[bridge:dispatch] invoked")
   let req_bytes = webview_copy_cstr(raw_req)
-  let resp = self.dispatch_req(@encoding/utf8.decode(req_bytes)) catch {
+  // `raw_id` is only valid for this callback's lifetime — copy it now so
+  // the async path (if any) can safely use it after this fn returns.
+  let id_bytes = webview_copy_cstr(raw_id)
+  let req_str = @encoding/utf8.decode(req_bytes) catch {
     Malformed(e) => {
       log(1, "[bridge:dispatch] utf8 decode error: \{e}")
-      CommandResponse::error("req decode failed")
+      let err_wire = CommandResponse::error("req decode failed").to_wire()
+      self.webview.respond_raw(raw_id, 1, err_wire)
+      return
     }
   }
-  let wire = resp.to_wire()
-  let status = match resp {
-    Ok(_) => 0
-    Error(_) => 1
+
+  // Check async handlers first so they can be defined alongside sync ones
+  // without conflict.  (A name must only appear in one map.)
+  try {
+    match (@json.parse(req_str) : Json) {
+      [String(name), payload] if self.async_handlers.get(name) is Some(h) => {
+        log(1, "[bridge:dispatch] running async handler inline: \{name}")
+        h(id_bytes, payload)
+      }
+      _ => {
+        // Sync path — dispatch_req handles both lookup and error cases.
+        let resp = self.dispatch_req(req_str)
+        let wire = resp.to_wire()
+        let status = match resp {
+          Ok(_) => 0
+          Error(_) => 1
+        }
+        log(1, "[bridge:dispatch] responding status=\{status}")
+        self.webview.respond_raw(raw_id, status, wire)
+      }
+    }
+  } catch {
+    _ => {
+      // Sync path fallback on parse error.
+      let resp = self.dispatch_req(req_str)
+      let wire = resp.to_wire()
+      let status = match resp {
+        Ok(_) => 0
+        Error(_) => 1
+      }
+      self.webview.respond_raw(raw_id, status, wire)
+    }
   }
-  log(1, "[bridge:dispatch] responding status=\{status}")
-  self.webview.respond_raw(raw_id, status, wire)
 }
 
 // ── JS scripts ────────────────────────────────────────────────────────────────
@@ -300,60 +398,69 @@ fn wire_str(resp : CommandResponse) -> String {
 /// Build a bare CommandBridge (no real webview binding) for unit-testing the
 /// pure `dispatch_req` path.  `WebView::new()` allocates an off-screen handle
 /// on macOS without opening a visible window.
-fn make_test_bridge() -> CommandBridge {
+fn[X] make_test_bridge(task_group : @async.TaskGroup[X]) -> CommandBridge[X] {
   CommandBridge::{
-    webview: WebView::new(),
+    webview: WebView::new(task_group),
     global_name: "MoonBitBridge",
     binding_name: "__moonbit_command",
     event_name: "moonbit:command",
     handlers: {},
+    async_handlers: {},
   }
 }
 
 ///|
-test "dispatch_req: ok response roundtrip" {
-  let bridge = make_test_bridge()
-  bridge.handlers.set("math:add", fn(json) {
-    match json {
-      { "left": Number(l, ..), "right": Number(r, ..), .. } =>
-        CommandResponse::ok({ "total": Json::number(l + r) })
-      _ => CommandResponse::error("bad payload")
-    }
+async test "dispatch_req: ok response roundtrip" {
+  @async.with_task_group(task_group => {
+    let bridge = make_test_bridge(task_group)
+    bridge.handlers.set("math:add", fn(json) {
+      match json {
+        { "left": Number(l, ..), "right": Number(r, ..), .. } =>
+          CommandResponse::ok({ "total": Json::number(l + r) })
+        _ => CommandResponse::error("bad payload")
+      }
+    })
+
+    let resp = bridge.dispatch_req("[\"math:add\",{\"left\":2,\"right\":3}]")
+
+    assert_eq(resp, CommandResponse::Ok({ "total": Json::number(5) }))
+    assert_eq(wire_str(resp), "[0,{\"total\":5}]")
   })
-
-  let resp = bridge.dispatch_req("[\"math:add\",{\"left\":2,\"right\":3}]")
-
-  assert_eq(resp, CommandResponse::Ok({ "total": Json::number(5) }))
-  assert_eq(wire_str(resp), "[0,{\"total\":5}]")
 }
 
 ///|
-test "dispatch_req: unknown command returns error" {
-  let bridge = make_test_bridge()
+async test "dispatch_req: unknown command returns error" {
+  @async.with_task_group(task_group => {
+    let bridge = make_test_bridge(task_group)
 
-  let resp = bridge.dispatch_req("[\"no-such-cmd\",null]")
+    let resp = bridge.dispatch_req("[\"no-such-cmd\",null]")
 
-  assert_true(resp is Error(_))
-  assert_true(wire_str(resp).has_prefix("[1,"))
+    assert_true(resp is Error(_))
+    assert_true(wire_str(resp).has_prefix("[1,"))
+  })
 }
 
 ///|
-test "dispatch_req: malformed JSON returns error" {
-  let bridge = make_test_bridge()
+async test "dispatch_req: malformed JSON returns error" {
+  @async.with_task_group(task_group => {
+    let bridge = make_test_bridge(task_group)
 
-  let resp = bridge.dispatch_req("not json at all")
+    let resp = bridge.dispatch_req("not json at all")
 
-  assert_true(resp is Error(_))
-  assert_true(wire_str(resp).has_prefix("[1,"))
+    assert_true(resp is Error(_))
+    assert_true(wire_str(resp).has_prefix("[1,"))
+  })
 }
 
 ///|
-test "dispatch_req: wrong shape returns error" {
-  let bridge = make_test_bridge()
+async test "dispatch_req: wrong shape returns error" {
+  @async.with_task_group(task_group => {
+    let bridge = make_test_bridge(task_group)
 
-  let resp = bridge.dispatch_req("{\"name\":\"foo\",\"payload\":null}")
+    let resp = bridge.dispatch_req("{\"name\":\"foo\",\"payload\":null}")
 
-  assert_true(resp is Error(_))
+    assert_true(resp is Error(_))
+  })
 }
 
 ///|
