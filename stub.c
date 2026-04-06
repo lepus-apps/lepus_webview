@@ -2,6 +2,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "moonbit.h"
 
@@ -91,7 +92,7 @@ moonbit_bytes_t moonbit_webview_copy_cstr(void *raw_cstr) {
     return bytes;
   }
 
-  len = strlen(cstr) + 1;
+  len = strlen(cstr);
   if (len > INT32_MAX) {
     abort();
   }

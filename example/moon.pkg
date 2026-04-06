@@ -1,5 +1,6 @@
 import {
   "lepus-apps/webview",
+  "moonbitlang/core/json",
 }
 
 supported_targets = "+native"
@@ -8,12 +9,10 @@ options(
   is_main: true,
   link: {
     "native": {
-      // MacOS
+      // MacOS / Linux
       "cc-link-flags": "-Llib -lwebview -Wl,-rpath,lib",
       // Windows
       // "cc-link-flags": "lib/webview.lib",
-      // Linux
-      // "cc-link-flags": "-Llib -lwebview",
     },
   },
 )

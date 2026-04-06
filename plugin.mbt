@@ -305,7 +305,7 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command(
   api_name : String,
   callback : (Payload) -> Reply,
 ) -> Unit {
-  self.install_command_api(api_name, fn(command_name) {
+  self.install_command_api(api_name, command_name => {
     self.host.bridge.handle(command_name, callback)
   })
 }
@@ -315,9 +315,9 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command(
 pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result(
   self : PluginContext,
   api_name : String,
-  callback : (Payload) -> Result[Reply, String],
+  callback : (Payload) -> Reply raise Error,
 ) -> Unit {
-  self.install_command_api(api_name, fn(command_name) {
+  self.install_command_api(api_name, command_name => {
     self.host.bridge.handle_result(command_name, callback)
   })
 }
@@ -380,9 +380,8 @@ fn WebView::plugin_host_registry_key(self : WebView) -> Int64 {
 
 ///|
 fn PluginHost::unregister_default_host(self : PluginHost) -> Unit {
-  match self.default_registry_key {
-    Some(key) => default_plugin_hosts.remove(key)
-    None => ()
+  if self.default_registry_key is Some(key) {
+    default_plugin_hosts.remove(key)
   }
 }
 

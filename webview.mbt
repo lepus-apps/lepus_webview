@@ -114,17 +114,19 @@ pub fn WebView::terminate(self : WebView) -> Unit {
 pub fn WebView::bind(
   self : WebView,
   name : String,
-  callback : (Bytes, Bytes) -> Unit,
+  callback : (String, String) -> Unit,
 ) -> Unit {
   let binding = webview_bind(
     self.handle,
     @encoding/utf8.encode(name),
-    fn(raw_id, raw_req, f) {
+    (id, req, f) => f(id, req),
+    (raw_id, raw_req) => {
       let id = webview_copy_cstr(raw_id)
       let req = webview_copy_cstr(raw_req)
-      f(id, req)
+      callback(@encoding/utf8.decode(id), @encoding/utf8.decode(req)) catch {
+        Malformed(err) => println("Error in binding callback: \{err}")
+      }
     },
-    callback,
   )
   if !webview_binding_is_null(binding) {
     self.bindings.set(name, binding)

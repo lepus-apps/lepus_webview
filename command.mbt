@@ -105,9 +105,7 @@ pub fn CommandBridge::new(
     event_name,
     handlers: {},
   }
-  bridge.webview.bind(binding_name, fn(id, req) {
-    bridge.handle_request(id, req)
-  })
+  bridge.webview.bind(binding_name, (id, req) => bridge.handle_request(id, req))
   bridge.webview.init(
     make_command_bridge_script(global_name, binding_name, event_name),
   )
@@ -174,17 +172,14 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle(
 pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result(
   self : CommandBridge,
   name : String,
-  callback : (Payload) -> Result[Reply, String],
+  callback : (Payload) -> Reply raise Error,
 ) -> Unit {
-  self.handlers.set(name, fn(payload_json) {
-    let payload : Result[Payload, _] = try? @json.from_json(payload_json)
-    match payload {
-      Ok(payload) =>
-        match callback(payload) {
-          Ok(reply) => CommandResponse::ok(reply)
-          Err(message) => CommandResponse::error(message)
-        }
-      Err(err) => CommandResponse::error(err.to_string())
+  self.handlers.set(name, payload_json => {
+    try {
+      let payload : Payload = @json.from_json(payload_json)
+      CommandResponse::ok(callback(payload))
+    } catch {
+      message => CommandResponse::error("\{message}")
     }
   })
 }
@@ -224,43 +219,31 @@ fn CommandBridge::respond(
 ///|
 fn CommandBridge::handle_request(
   self : CommandBridge,
-  raw_id : Bytes,
-  raw_req : Bytes,
+  id : String,
+  req : String,
 ) -> Unit {
-  let id = try! @encoding/utf8.decode(raw_id)
-  let req = try! @encoding/utf8.decode(raw_req)
-  let response = match parse_command_request(req) {
-    Ok(command) =>
-      match self.handlers.get(command.name) {
-        Some(handler) => handler(command.payload)
-        None => CommandResponse::error("Unknown command: " + command.name)
-      }
-    Err(message) => CommandResponse::error(message)
+  let response = try {
+    let request = parse_command_request(req)
+    match self.handlers.get(request.name) {
+      Some(handler) => handler(request.payload)
+      None => fail("Unknown command: " + request.name)
+    }
+  } catch {
+    message => CommandResponse::error("\{message}")
   }
   self.respond(id, response)
 }
 
 ///|
-fn parse_command_request(raw_req : String) -> Result[Command, String] {
+fn parse_command_request(raw_req : String) -> Command raise Error {
   // A webview binding receives its JS arguments as a JSON array. The bridge
   // expects exactly one argument: the `{ name, payload }` command object.
-  let request_json : Result[Json, _] = try? @json.parse(raw_req)
-  match request_json {
-    Err(err) => Err(err.to_string())
-    Ok(request_json) => {
-      let request_args : Result[Array[Command], _] = try? @json.from_json(
-        request_json,
-      )
-      match request_args {
-        Err(err) => Err(err.to_string())
-        Ok(request_args) =>
-          if request_args.length() == 1 {
-            Ok(request_args[0])
-          } else {
-            Err("Expected exactly one command argument")
-          }
-      }
-    }
+  let request_json : Json = @json.parse(raw_req)
+  let request_args : Array[Command] = @json.from_json(request_json)
+  if request_args is [arg] {
+    arg
+  } else {
+    fail("Expected exactly one command argument")
   }
 }
 

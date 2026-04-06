@@ -1,7 +1,9 @@
 {
   "name": "lepus-apps/webview",
   "version": "0.1.0",
-  "deps": {},
+  "deps": {
+    "moonbitlang/async": "0.17.0"
+  },
   "readme": "README.mbt.md",
   "repository": "https://github.com/lepus-apps/lepus_webview",
   "license": "Apache-2.0",
@@ -12,6 +14,6 @@
     "framework"
   ],
   "description": "A modern desktop application framework based on web technologies.",
-  "source": "",
+  "source": ".",
   "preferred-target": "native"
 }
