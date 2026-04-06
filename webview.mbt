@@ -42,12 +42,48 @@ struct WebView {
   destroy_hooks : Map[String, () -> Unit]
 }
 
+// ── Internal logging ──────────────────────────────────────────────────────────
+//
+// log_level controls verbosity of internal [bridge] / [plugin] traces:
+//   0  silent  (default)
+//   1  info    key lifecycle events (command registered, dispatch invoked,
+//              response sent)
+//   2  verbose full payloads and handler results
+//
+// Set automatically by WebView::new(debug=1).  Can also be adjusted at
+// runtime via set_log_level().
+
+///|
+let webview_log_level : Ref[Int] = { val: 0 }
+
+///|
+/// Set the internal log verbosity.
+///
+/// - `0` — silent (default)
+/// - `1` — info: lifecycle events (registered commands, invocations, responses)
+/// - `2` — verbose: full request/response payloads
+pub fn set_log_level(level : Int) -> Unit {
+  webview_log_level.val = level
+}
+
+///|
+/// Emit a log line if `level` ≤ the current log level.
+/// The prefix is always included so grep filtering works without extra tooling.
+pub fn log(level : Int, msg : String) -> Unit {
+  if level <= webview_log_level.val {
+    println(msg)
+  }
+}
+
 ///|
 /// Creates a new webview instance.
 ///
 /// Parameters:
-/// - `debug` - If set to 1, enables debugging mode.
+/// - `debug` - If set to 1, enables debugging mode and internal logging.
 pub fn WebView::new(debug? : Int = 0) -> WebView {
+  if debug > 0 {
+    set_log_level(debug)
+  }
   WebView::{
     handle: webview_create(debug, 0L),
     bindings: {},
@@ -103,17 +139,31 @@ pub fn WebView::bind(
   name : String,
   callback : (String, String) -> Unit,
 ) -> Unit {
+  self.bind_raw(name, fn(raw_id, raw_req) {
+    let req = webview_copy_cstr(raw_req)
+    let id = webview_copy_cstr(raw_id)
+    callback(@encoding/utf8.decode(id), @encoding/utf8.decode(req)) catch {
+      Malformed(err) => println("Error in binding callback: \{err}")
+    }
+  })
+}
+
+///|
+/// Low-level bind variant that hands raw borrowed Bytes directly to the
+/// callback.
+///
+/// `raw_id` and `raw_req` are valid only for the duration of the callback.
+/// Use `WebView::respond_raw` to reply without copying the id into a String.
+fn WebView::bind_raw(
+  self : WebView,
+  name : String,
+  callback : (Bytes, Bytes) -> Unit,
+) -> Unit {
   let binding = webview_bind(
     self.handle,
     @encoding/utf8.encode(name),
     fn(raw_id, raw_req, f) { f(raw_id, raw_req) },
-    fn(raw_id, raw_req) {
-      let id = webview_copy_cstr(raw_id)
-      let req = webview_copy_cstr(raw_req)
-      callback(@encoding/utf8.decode(id), @encoding/utf8.decode(req)) catch {
-        Malformed(err) => println("Error in binding callback: \{err}")
-      }
-    },
+    callback,
   )
   if !webview_binding_is_null(binding) {
     self.bindings.set(name, binding)
@@ -205,6 +255,9 @@ pub fn WebView::init(self : WebView, js : String) -> Unit {
 ///|
 /// Responds to a binding call from JavaScript.
 ///
+/// Prefer `respond_raw` in hot paths (e.g. CommandBridge) to avoid
+/// encoding the id back to Bytes when it was already a C string.
+///
 /// Parameters:
 /// - `id`     - The call identifier received in the binding callback.
 /// - `status` - 0 for success; any other value signals an error to JS.
@@ -215,12 +268,32 @@ pub fn WebView::response(
   status : Int,
   result : String,
 ) -> Unit {
-  webview_return(
+  webview_return_raw(
     self.handle,
     @encoding/utf8.encode(id),
     status,
     @encoding/utf8.encode(result),
   )
+}
+
+///|
+/// Zero-copy response variant.
+///
+/// `raw_id` is the borrowed Bytes pointer received in a `bind_raw` callback;
+/// it must not be stored beyond the callback. `result` is a UTF-8 encoded
+/// wire frame (`[0,<json>]` or `[1,"<msg>"]`) produced by
+/// `CommandResponse::to_wire`; it is passed directly to C without copying.
+///
+/// `status` must match the wire frame: 0 for success, 1 for error.
+/// JS only inspects `result` — `status` tells the webview engine whether to
+/// resolve or reject the Promise before `result` is even parsed.
+fn WebView::respond_raw(
+  self : WebView,
+  raw_id : Bytes,
+  status : Int,
+  result : Bytes,
+) -> Unit {
+  webview_return_raw(self.handle, raw_id, status, result)
 }
 
 ///|
@@ -259,7 +332,9 @@ fn WebView::register_destroy_hook(
   hook : () -> Unit,
 ) -> Unit {
   guard self.destroy_hooks.get(hook_name) is None else {
-    abort("WebView::register_destroy_hook: hook already registered: " + hook_name)
+    abort(
+      "WebView::register_destroy_hook: hook already registered: " + hook_name,
+    )
   }
   self.destroy_hooks.set(hook_name, hook)
 }

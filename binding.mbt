@@ -117,13 +117,17 @@ extern "C" fn webview_unbind(
 ) -> Unit = "moonbit_webview_unbind"
 
 ///|
+/// Respond to a binding call using raw borrowed C-string pointers.
+/// `seq` is the pointer received in the bind trampoline — it is valid only
+/// during the callback invocation and must not be stored.
+/// `result` is a MoonBit Bytes value (null-terminated by the runtime).
 #borrow(seq, result)
-extern "C" fn webview_return(
+extern "C" fn webview_return_raw(
   w : WebView_t,
   seq : Bytes,
   status : Int,
   result : Bytes,
-) -> Unit = "webview_return"
+) -> Unit = "moonbit_webview_return_raw"
 
 ///|
 /// Returns true when a BindingHandle is null (webview_bind failed).

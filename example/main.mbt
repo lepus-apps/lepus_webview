@@ -28,8 +28,14 @@ fn main {
       #|<p id="sum-result">Result: </p>
       #|<script>
       #|  document.getElementById("sum-btn").addEventListener("click", async () => {
-      #|    const { payload } = await window.MoonBitPlugins.math.sum({ left: 2, right: 3 });
-      #|    document.getElementById("sum-result").textContent = "Result: " + payload.total;
+      #|    try {
+      #|      const result = await window.MoonBitPlugins.math.sum({ left: 2, right: 3 });
+      #|      console.log("[example] sum result:", JSON.stringify(result));
+      #|      document.getElementById("sum-result").textContent = "Result: " + result.total;
+      #|    } catch(e) {
+      #|      console.error("[example] sum error:", e);
+      #|      document.getElementById("sum-result").textContent = "Error: " + e.message;
+      #|    }
       #|  });
       #|</script>
     ),

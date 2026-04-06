@@ -29,6 +29,7 @@ int webview_bind(
   void *arg
 );
 int webview_unbind(webview_t w, const char *name);
+int webview_return(webview_t w, const char *seq, int status, const char *result);
 
 static void moonbit_webview_free_binding(struct moonbit_webview_binding *binding) {
   if (binding == NULL) return;
@@ -77,6 +78,28 @@ MOONBIT_FFI_EXPORT
 void moonbit_webview_unbind(webview_t w, const char *name, void *raw_binding) {
   webview_unbind(w, name);
   moonbit_webview_free_binding((struct moonbit_webview_binding *)raw_binding);
+}
+
+/* ── webview_return zero-copy variant ───────────────────────────────────── */
+
+/*
+ * Respond to a binding call using the raw seq pointer received in the
+ * trampoline callback.  seq is valid for the duration of the callback; we
+ * pass it straight to webview_return without copying it into MoonBit's heap.
+ * result is a MoonBit Bytes value (null-terminated by the runtime), so it can
+ * be cast directly to const char*.
+ *
+ * This saves 2 moonbit_webview_copy_cstr allocations + 2 UTF-8 decode/encode
+ * roundtrips compared to routing seq through the MoonBit string system.
+ */
+MOONBIT_FFI_EXPORT
+void moonbit_webview_return_raw(
+  webview_t w,
+  const char *seq,   /* #borrow: raw C pointer, not a MoonBit object */
+  int32_t status,
+  const char *result /* #borrow: MoonBit Bytes, null-terminated by runtime */
+) {
+  webview_return(w, seq, (int)status, result);
 }
 
 /* ── Misc helpers ────────────────────────────────────────────────────────── */
