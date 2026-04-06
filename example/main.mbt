@@ -23,15 +23,13 @@ fn main {
   )
   ..set_html(
     (
-      #|<p>Hello Lepus<p>
+      #|<p>Hello Lepus</p>
       #|<button id="sum-btn">Sum 2 + 3</button>
       #|<p id="sum-result">Result: </p>
       #|<script>
       #|  document.getElementById("sum-btn").addEventListener("click", async () => {
-      #|    console.log("clicked");
-      #|    const result = await window.MoonBitBridge.send('plugin:"math":"sum"', { left: 2, right: 3 })
-      #|    console.log(result)
-      #|    document.getElementById("sum-result").textContent = "Result: " + result.payload.total;
+      #|    const { payload } = await window.MoonBitPlugins.math.sum({ left: 2, right: 3 });
+      #|    document.getElementById("sum-result").textContent = "Result: " + payload.total;
       #|  });
       #|</script>
     ),
