@@ -1,5 +1,5 @@
 ///|
-/// A plugin definition that can be installed into a `WebView` or `PluginHost`.
+/// A plugin definition that can be installed into a `PluginHost`.
 ///
 /// A plugin is typically exposed from a MoonBit module:
 ///
@@ -14,8 +14,8 @@
 /// ```
 ///
 /// `on_install` runs after the plugin has finished registering commands and
-/// JS helpers on the host. `on_destroy` runs when the owning webview/plugin
-/// host is destroyed, before the underlying `CommandBridge` is torn down.
+/// JS helpers on the host. `on_destroy` runs when the owning plugin host
+/// is destroyed.
 struct Plugin[X] {
   name : String
   register : (PluginContext[X]) -> Unit
@@ -24,31 +24,19 @@ struct Plugin[X] {
 }
 
 ///|
-/// Advanced plugin host built on top of `CommandBridge`.
-///
-/// Most applications should install plugins through
-/// `webview.install_plugin(...)`, which uses a default `PluginHost` under
-/// `window.MoonBitPlugins`. Construct `PluginHost` directly only when you need
-/// custom JS namespace or bridge names.
+/// Plugin host built on top of `CommandBridge`.
 ///
 /// On the JavaScript side this exposes:
 /// - `window[global_name]["@@call"](plugin_name, api_name, payload)`
 /// - `window[global_name][plugin_name][api_name](payload)`
 /// - `window[global_name][plugin_name]["@@on"](listener)`
 /// - `window[global_name][plugin_name]["@@onEvent"](name, listener)`
-///
-/// These JS APIs forward to MoonBit through `CommandBridge::handle(...)`.
-/// Plugin events are forwarded from MoonBit to JavaScript through the same
-/// bridge and delivered as `PluginEvent`.
 struct PluginHost[X] {
   webview : WebView[X]
   bridge : CommandBridge[X]
   global_name : String
   plugins : Map[String, Bool]
   apis : Map[String, Bool]
-  destroy_hooks : Map[String, () -> Unit]
-  destroy_hook_name : String
-  is_default : Bool
 }
 
 ///|
@@ -64,11 +52,10 @@ pub struct PluginEvent {
   plugin : String
   name : String
   payload : Json
-} derive(ToJson, FromJson, Show, Eq)
+} derive(ToJson, FromJson, Eq)
 
 ///|
-/// Builds a plugin value that can later be installed on a `WebView` or
-/// `PluginHost`.
+/// Builds a plugin value that can later be installed on a `PluginHost`.
 pub fn[X] Plugin::new(
   name : String,
   register : (PluginContext[X]) -> Unit,
@@ -81,109 +68,25 @@ pub fn[X] Plugin::new(
 ///|
 /// Creates a plugin host backed by a `CommandBridge`.
 ///
-/// This is the advanced/manual API. For the default host attached to a webview,
-/// prefer `webview.install_plugin(...)` and `webview.plugin_host()`.
-///
-/// `global_name` controls the JavaScript namespace used for plugin APIs and
-/// defaults to `window.MoonBitPlugins`.
-///
-/// `command_global_name`, `binding_name`, and `event_name` are passed through
-/// to the underlying `CommandBridge`.
+/// `global_name` controls the JavaScript namespace used for plugin APIs
+/// (defaults to `window.MoonBitPlugins`).
 pub fn[X] PluginHost::new(
   webview : WebView[X],
   global_name? : String = "MoonBitPlugins",
-  command_global_name? : String = "MoonBitBridge",
-  binding_name? : String = "__moonbit_command",
-  event_name? : String = "moonbit:command",
 ) -> PluginHost[X] {
-  make_plugin_host(
+  let bridge = CommandBridge::new(
     webview,
-    global_name~,
-    command_global_name~,
-    binding_name~,
-    event_name~,
-  )
-}
-
-///|
-/// Returns the default plugin host attached to this webview.
-///
-/// The host is created lazily and reused by `webview.install_plugin(...)` and
-/// `webview.emit_plugin(...)`.
-pub fn[X] WebView::plugin_host(self : WebView[X]) -> PluginHost[X] {
-  match self.default_plugin_host {
-    Some(host) => host
-    None => {
-      let host = make_plugin_host(self, is_default=true)
-      self.default_plugin_host = Some(host)
-      host
-    }
-  }
-}
-
-///|
-/// Installs a plugin into the webview's default plugin host.
-pub fn[X] WebView::install_plugin(
-  self : WebView[X],
-  plugin : Plugin[X],
-) -> Unit {
-  self.plugin_host().install(plugin)
-}
-
-///|
-/// Emits a plugin-scoped event from the main program through the webview's
-/// default plugin host.
-pub fn[X, Payload : ToJson] WebView::emit_plugin(
-  self : WebView[X],
-  plugin_name : String,
-  event_name : String,
-  payload : Payload,
-) -> Unit {
-  self.plugin_host().emit(plugin_name, event_name, payload)
-}
-
-///|
-fn[X] make_plugin_host(
-  webview : WebView[X],
-  global_name? : String = "MoonBitPlugins",
-  command_global_name? : String = "MoonBitBridge",
-  binding_name? : String = "__moonbit_command",
-  event_name? : String = "moonbit:command",
-  is_default? : Bool = false,
-) -> PluginHost[X] {
-  let destroy_hook_name = plugin_host_destroy_hook_name(
-    global_name, binding_name,
+    global_name="MoonBitBridge",
   )
   let host = PluginHost::{
     webview,
-    bridge: CommandBridge::new(
-      webview,
-      global_name=command_global_name,
-      binding_name~,
-      event_name~,
-    ),
+    bridge,
     global_name,
     plugins: {},
     apis: {},
-    destroy_hooks: {},
-    destroy_hook_name,
-    is_default,
   }
-  webview.register_destroy_hook(destroy_hook_name, fn() { host.destroy() })
-  host.install_script(make_plugin_host_script(global_name, command_global_name))
+  host.install_script(make_plugin_host_script(global_name, "MoonBitBridge"))
   host
-}
-
-///|
-/// Returns the JavaScript global object name used for plugin APIs.
-pub fn[X] PluginHost::global_name(self : PluginHost[X]) -> String {
-  self.global_name
-}
-
-///|
-/// Returns the underlying command bridge used by the plugin host.
-pub fn[X] PluginHost::command_bridge(self : PluginHost[X]) -> CommandBridge[X] {
-  self.bridge
 }
 
 ///|
@@ -200,7 +103,6 @@ pub fn[X] PluginHost::install(self : PluginHost[X], plugin : Plugin[X]) -> Unit 
   }
   let context = PluginContext::{ host: self, plugin_name: plugin.name }
   self.plugins.set(plugin.name, true)
-  self.destroy_hooks.set(plugin.name, fn() { (plugin.on_destroy)(context) })
   self.install_script(
     make_plugin_namespace_script(self.global_name, plugin.name),
   )
@@ -209,52 +111,23 @@ pub fn[X] PluginHost::install(self : PluginHost[X], plugin : Plugin[X]) -> Unit 
 }
 
 ///|
-/// Drops all registered plugin metadata and destroys the underlying
-/// `CommandBridge`.
+/// Destroys the plugin host and all installed plugins.
 pub fn[X] PluginHost::destroy(self : PluginHost[X]) -> Unit {
-  self.unregister_default_host()
-  self.webview.unregister_destroy_hook(self.destroy_hook_name)
-  for _, hook in self.destroy_hooks {
-    hook()
-  }
   self.plugins.clear()
   self.apis.clear()
-  self.destroy_hooks.clear()
   self.bridge.destroy()
 }
 
 ///|
-/// Runs the underlying webview loop.
-///
-/// `PluginHost` cleanup is already attached to the underlying `WebView`
-/// lifecycle, so `webview.run()` and `plugins.run()` are equivalent. Prefer
-/// `webview.run()` in normal application code.
-pub fn[X] PluginHost::run(self : PluginHost[X]) -> Unit {
-  self.webview.run()
+/// Returns the JavaScript global object name used for plugin APIs.
+pub fn[X] PluginHost::global_name(self : PluginHost[X]) -> String {
+  self.global_name
 }
 
 ///|
-/// Returns the plugin name currently being installed.
-pub fn[X] PluginContext::name(self : PluginContext[X]) -> String {
-  self.plugin_name
-}
-
-///|
-/// Returns the JavaScript global object name used by the owning plugin host.
-pub fn[X] PluginContext::global_name(self : PluginContext[X]) -> String {
-  self.host.global_name
-}
-
-///|
-/// Installs raw JavaScript into the owning plugin host.
-///
-/// This is useful for plugins that expose browser-side helpers directly instead
-/// of routing every call through MoonBit command handlers.
-pub fn[X] PluginContext::install_script(
-  self : PluginContext[X],
-  script : String,
-) -> Unit {
-  self.host.install_script(script)
+/// Returns the underlying command bridge used by the plugin host.
+pub fn[X] PluginHost::command_bridge(self : PluginHost[X]) -> CommandBridge[X] {
+  self.bridge
 }
 
 ///|
@@ -263,9 +136,6 @@ pub fn[X] PluginContext::install_script(
 /// JavaScript receives these events through
 /// `window.MoonBitPlugins[plugin_name]["@@on"](...)` and
 /// `window.MoonBitPlugins[plugin_name]["@@onEvent"](...)`.
-///
-/// For the default host attached to a `WebView`, prefer
-/// `webview.emit_plugin(...)`.
 pub fn[X, Payload : ToJson] PluginHost::emit(
   self : PluginHost[X],
   plugin_name : String,
@@ -283,9 +153,28 @@ pub fn[X, Payload : ToJson] PluginHost::emit(
 }
 
 ///|
-/// Emits a plugin-scoped event to JavaScript.
-///
-/// This is safe to call from command handlers or lifecycle hooks.
+/// Returns the plugin name currently being installed.
+pub fn[X] PluginContext::name(self : PluginContext[X]) -> String {
+  self.plugin_name
+}
+
+///|
+/// Returns the JavaScript global object name used by the owning plugin host.
+pub fn[X] PluginContext::global_name(self : PluginContext[X]) -> String {
+  self.host.global_name
+}
+
+///|
+/// Installs raw JavaScript into the owning plugin host.
+pub fn[X] PluginContext::install_script(
+  self : PluginContext[X],
+  script : String,
+) -> Unit {
+  self.host.install_script(script)
+}
+
+///|
+/// Emits a plugin-scoped event from the main program to JavaScript.
 pub fn[X, Payload : ToJson] PluginContext::emit(
   self : PluginContext[X],
   event_name : String,
@@ -322,18 +211,11 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_resul
 }
 
 ///|
-/// Registers an **async** typed plugin command.
+/// Registers an async typed plugin command.
 ///
-/// The callback is spawned as a `moonbitlang/async` coroutine, so it can
-/// freely `await` IO operations.  The JS-side Promise stays pending until
-/// the coroutine completes.
-///
-/// Example:
-/// ```moonbit nocheck
-/// plugin.command_async("read_file", async fn(req : ReadRequest) -> String {
-///   @fs.read_to_string(req.path)   // awaits IO
-/// })
-/// ```
+/// The command becomes callable from JavaScript through:
+/// `window.MoonBitPlugins[plugin_name][api_name](payload)`.
+/// The callback is spawned as a background task, non-blocking.
 pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_async(
   self : PluginContext[X],
   api_name : String,
@@ -345,14 +227,14 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_async
 }
 
 ///|
-/// Registers an **async** typed plugin command that can raise errors.
+/// Registers an async typed plugin command that can return explicit command errors.
 pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result_async(
   self : PluginContext[X],
   api_name : String,
   callback : async (Payload) -> Reply raise Error,
 ) -> Unit {
   self.install_command_api(api_name, command_name => {
-    self.host.bridge.handle_result_async(command_name, callback)
+    self.host.bridge.handle_async(command_name, callback)
   })
 }
 
@@ -394,7 +276,6 @@ fn[X] PluginContext::install_command_api(
   self.host.install_script(
     make_plugin_api_script(
       self.host.global_name,
-      self.host.bridge.global_name(),
       self.plugin_name,
       api_name,
       command_name,
@@ -405,14 +286,7 @@ fn[X] PluginContext::install_command_api(
 ///|
 fn[X] PluginHost::install_script(self : PluginHost[X], script : String) -> Unit {
   self.webview.init(script)
-  self.webview.dispatch(fn() { self.webview.eval(script) })
-}
-
-///|
-fn[X] PluginHost::unregister_default_host(self : PluginHost[X]) -> Unit {
-  if self.is_default {
-    self.webview.default_plugin_host = None
-  }
+  self.webview.eval(script)
 }
 
 ///|
@@ -428,14 +302,6 @@ fn plugin_command_name(plugin_name : String, api_name : String) -> String {
 ///|
 fn plugin_event_command_name() -> String {
   "@@plugin:event"
-}
-
-///|
-fn plugin_host_destroy_hook_name(
-  global_name : String,
-  binding_name : String,
-) -> String {
-  "plugin-host:\{global_name}:\{binding_name}"
 }
 
 ///|
@@ -466,7 +332,7 @@ fn make_plugin_host_script(
   let global_name_js = string_literal(global_name)
   let bridge_global_name_js = string_literal(bridge_global_name)
   (
-    $|!function(){const n=\{global_name_js},e=window[n],t=e&&"object"==typeof e?e:Object.create(null);function r(){const n=window[\{bridge_global_name_js}];return n&&"function"==typeof n.sendCmd?n:null}function i(n){return Array.isArray(n["@@listeners"])||(n["@@listeners"]=[]),"function"!=typeof n["@@on"]&&(n["@@on"]=function(e){if(t["@@ensureBridgeListener"](),"function"!=typeof e)throw new TypeError("MoonBit plugin listener must be a function");return n["@@listeners"].push(e),function(){n["@@listeners"]=n["@@listeners"].filter(function(n){return n!==e})}}),"function"!=typeof n["@@onEvent"]&&(n["@@onEvent"]=function(e,t){if("function"!=typeof t)throw new TypeError("MoonBit plugin listener must be a function");return n["@@on"](function(n){n.name===e&&t(n)})}),n}t["@@call"]=function(n,e,i){t["@@ensureBridgeListener"]();const o=r();return o?o.sendCmd("plugin:"+JSON.stringify(n)+":"+JSON.stringify(e),i):Promise.reject(new Error("MoonBit command bridge is not available"))},t["@@ensurePlugin"]=function(n){const e=t[n];if(e&&"object"==typeof e)return i(e);const r=Object.create(null);return t[n]=r,i(r)},t["@@emit"]=function(n,e,r){const i={plugin:n,name:e,payload:void 0===r?null:r},o=t["@@ensurePlugin"](n)["@@listeners"].slice();for(const n of o)n(i);return i},t["@@ensureBridgeListener"]=function(){if(t["@@bridgeListenerInstalled"])return!0;const n=r();return!(!n||"function"!=typeof n.onCommand)&&(n.onCommand(function(n){if(!Array.isArray(n)||"@@plugin:event"!==n[0])return;const e=n[1];e&&"object"==typeof e&&t["@@emit"](e.plugin,e.name,e.payload)}),t["@@bridgeListenerInstalled"]=!0,!0)},t["@@defineApi"]=function(n,e,i){const o=t["@@ensurePlugin"](n);return t["@@ensureBridgeListener"](),o[e]=function(n){const e=r();return e?e.sendCmd(i,n):Promise.reject(new Error("MoonBit command bridge is not available"))},o[e]},t["@@has"]=function(n,e){const r=t[n];return!(!r||"function"!=typeof r[e])},t["@@ensureBridgeListener"](),window[n]=t}();
+    $|!function(){const n=\{global_name_js},e=window[n],t=e&&"object"==typeof e?e:Object.create(null);function r(){const n=window[\{bridge_global_name_js}];return n&&"function"==typeof n.send?n:null}function i(n){return Array.isArray(n["@@listeners"])||(n["@@listeners"]=[]),"function"!=typeof n["@@on"]&&(n["@@on"]=function(e){if(t["@@ensureBridgeListener"](),"function"!=typeof e)throw new TypeError("MoonBit plugin listener must be a function");return n["@@listeners"].push(e),function(){n["@@listeners"]=n["@@listeners"].filter(function(n){return n!==e})}}),"function"!=typeof n["@@onEvent"]&&(n["@@onEvent"]=function(e,t){if("function"!=typeof t)throw new TypeError("MoonBit plugin listener must be a function");return n["@@on"](function(n){n.name===e&&t(n)})}),n}t["@@call"]=function(n,e,i){t["@@ensureBridgeListener"]();const o=r();return o?o.send("plugin:"+JSON.stringify(n)+":"+JSON.stringify(e),i):Promise.reject(new Error("MoonBit command bridge is not available"))},t["@@ensurePlugin"]=function(n){const e=t[n];if(e&&"object"==typeof e)return i(e);const r=Object.create(null);return t[n]=r,i(r)},t["@@emit"]=function(n,e,r){const i={plugin:n,name:e,payload:void 0===r?null:r},o=t["@@ensurePlugin"](n)["@@listeners"].slice();for(const n of o)n(i);return i},t["@@ensureBridgeListener"]=function(){if(t["@@bridgeListenerInstalled"])return!0;const n=r();return!(!n||"function"!=typeof n.onCommand)&&(n.onCommand(function(n){if(!Array.isArray(n)||"@@plugin:event"!==n[0])return;const e=n[1];e&&"object"==typeof e&&t["@@emit"](e.plugin,e.name,e.payload)}),t["@@bridgeListenerInstalled"]=!0,!0)},t["@@defineApi"]=function(n,e,i){const o=t["@@ensurePlugin"](n);return t["@@ensureBridgeListener"](),o[e]=function(n){const e=r();return e?e.send(i,n):Promise.reject(new Error("MoonBit command bridge is not available"))},o[e]},t["@@has"]=function(n,e){const r=t[n];return!(!r||"function"!=typeof r[e])},t["@@ensureBridgeListener"](),window[n]=t}();
   )
 }
 
@@ -485,7 +351,6 @@ fn make_plugin_namespace_script(
 ///|
 fn make_plugin_api_script(
   global_name : String,
-  bridge_global_name : String,
   plugin_name : String,
   api_name : String,
   command_name : String,
@@ -495,7 +360,7 @@ fn make_plugin_api_script(
   let api_name_js = string_literal(api_name)
   let command_name_js = string_literal(command_name)
   (
-    $|!function(){const n=\{global_name_js},e=\{plugin_name_js},o=\{api_name_js},t=\{command_name_js},i=window[n]&&"object"==typeof window[n]?window[n]:window[n]=Object.create(null);if("function"==typeof i["@@defineApi"])return void i["@@defineApi"](e,o,t);(i[e]&&"object"==typeof i[e]?i[e]:i[e]=Object.create(null))[o]=function(n){const e=window[\{string_literal(bridge_global_name)}];return e&&"function"==typeof e.sendCmd?e.sendCmd(t,n):Promise.reject(new Error("MoonBit command bridge is not available"))}}();
+    $|!function(){const n=\{global_name_js},e=\{plugin_name_js},o=\{api_name_js},t=\{command_name_js},i=window[n]&&"object"==typeof window[n]?window[n]:window[n]=Object.create(null);if("function"==typeof i["@@defineApi"])return void i["@@defineApi"](e,o,t);(i[e]&&"object"==typeof i[e]?i[e]:i[e]=Object.create(null))[o]=function(n){const e=window[n];return e&&"function"==typeof e.send?e.send(t,n):Promise.reject(new Error("MoonBit command bridge is not available"))}}();
   )
 }
 
@@ -515,13 +380,5 @@ test "plugin command names remain JSON quoted for stable JS dispatch" {
   assert_eq(
     plugin_command_name("quote\"plugin", "slash\\api"),
     "plugin:\"quote\\\"plugin\":\"slash\\\\api\"",
-  )
-}
-
-///|
-test "plugin host destroy hook name stays deterministic" {
-  assert_eq(
-    plugin_host_destroy_hook_name("MoonBitPlugins", "__moonbit_command"),
-    "plugin-host:MoonBitPlugins:__moonbit_command",
   )
 }

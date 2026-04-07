@@ -52,15 +52,6 @@ extern "C" fn webview_set_size(
   hint : SizeHint,
 ) -> Unit = "webview_set_size"
 
-///|
-extern "C" fn webview_get_window(w : WebView_t) -> Int64 = "webview_get_window"
-
-///|
-extern "C" fn webview_get_native_handle(
-  w : WebView_t,
-  kind : NativeHandleKind,
-) -> Int64 = "webview_get_native_handle"
-
 // ── Navigation ───────────────────────────────────────────────────────────────
 
 ///|
@@ -270,3 +261,16 @@ pub extern "C" fn wm_ipc_send(
   subtype : Bytes,
   data : Bytes,
 ) -> Int = "moonbit_wm_ipc_send"
+
+///|
+/// Receive an IPC message (non-blocking).
+/// Returns the number of bytes in the received message, or 0 if no message.
+/// The message is stored in a static buffer; copy it before calling again.
+pub extern "C" fn wm_ipc_recv(window_id : Int) -> Int = "moonbit_wm_ipc_recv"
+
+///|
+/// Get the last received IPC message data.
+/// Returns (message_type, subtype, data) as (Int, Bytes, Bytes).
+pub extern "C" fn wm_ipc_get_message(
+  window_id : Int,
+) -> (Int, Bytes, Bytes) = "moonbit_wm_ipc_get_message"

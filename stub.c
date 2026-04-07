@@ -1766,6 +1766,156 @@ MOONBIT_FFI_EXPORT int moonbit_webview_broadcast_message(
         message_data);
 }
 
+/* ─── IPC 消息接收（供 MoonBit 轮询） ─────────────────────────────── */
+
+/* 每个窗口的 IPC 接收队列（单条消息缓冲） */
+typedef struct
+{
+    ipc_msg_type_t message_type;
+    char subtype[IPC_SUBTYPE_LEN];
+    char *data;
+    int32_t data_length;
+    int has_message;
+    pthread_mutex_t mutex;
+} ipc_recv_queue_t;
+
+static ipc_recv_queue_t *g_recv_queue = NULL;
+static int g_recv_queue_capacity = 0;
+static pthread_mutex_t g_recv_queues_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static ipc_recv_queue_t *get_recv_queue(int window_id)
+{
+    pthread_mutex_lock(&g_recv_queues_mutex);
+    if (window_id <= 0 || window_id > g_recv_queue_capacity || !g_recv_queue)
+    {
+        pthread_mutex_unlock(&g_recv_queues_mutex);
+        return NULL;
+    }
+    pthread_mutex_unlock(&g_recv_queues_mutex);
+    return &g_recv_queue[window_id - 1];
+}
+
+static void ensure_recv_queues(void)
+{
+    pthread_mutex_lock(&g_recv_queues_mutex);
+    if (g_recv_queue_capacity < g_wm.next_window_id + 16)
+    {
+        int new_cap = g_recv_queue_capacity == 0 ? 32 : g_recv_queue_capacity * 2;
+        if (new_cap < g_wm.next_window_id + 16)
+            new_cap = g_wm.next_window_id + 16;
+        ipc_recv_queue_t *new_q =
+            (ipc_recv_queue_t *)realloc(g_recv_queue, new_cap * sizeof(ipc_recv_queue_t));
+        if (new_q)
+        {
+            for (int i = g_recv_queue_capacity; i < new_cap; i++)
+            {
+                memset(&new_q[i], 0, sizeof(ipc_recv_queue_t));
+                pthread_mutex_init(&new_q[i].mutex, NULL);
+            }
+            g_recv_queue = new_q;
+            g_recv_queue_capacity = new_cap;
+        }
+    }
+    pthread_mutex_unlock(&g_recv_queues_mutex);
+}
+
+/* IPC 消息回调：将消息放入窗口的接收队列 */
+static void ipc_recv_callback(ipc_message_t *msg)
+{
+    if (msg->target_window_id <= 0)
+        return;
+    ipc_recv_queue_t *q = get_recv_queue(msg->target_window_id);
+    if (!q)
+        return;
+    pthread_mutex_lock(&q->mutex);
+    if (!q->has_message)
+    {
+        if (q->data)
+            free(q->data);
+        q->message_type = msg->message_type;
+        strncpy(q->subtype, msg->subtype, IPC_SUBTYPE_LEN - 1);
+        if (msg->data && msg->data_length > 0)
+        {
+            q->data = (char *)malloc(msg->data_length + 1);
+            if (q->data)
+            {
+                memcpy(q->data, msg->data, msg->data_length);
+                q->data[msg->data_length] = '\0';
+            }
+            q->data_length = msg->data_length;
+        }
+        else
+        {
+            q->data = NULL;
+            q->data_length = 0;
+        }
+        q->has_message = 1;
+    }
+    pthread_mutex_unlock(&q->mutex);
+}
+
+/**
+ * 非阻塞检查是否有 IPC 消息等待指定窗口。
+ * 返回消息字节数（>0），无可用消息返回 0。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_recv(int window_id)
+{
+    ensure_recv_queues();
+    ipc_recv_queue_t *q = get_recv_queue(window_id);
+    if (!q)
+        return 0;
+    pthread_mutex_lock(&q->mutex);
+    int result = q->has_message ? (int)q->data_length : 0;
+    pthread_mutex_unlock(&q->mutex);
+    return result;
+}
+
+/**
+ * 获取最后一条 IPC 消息。
+ * 返回 (message_type, subtype, data) 元组。
+ * 调用前应先用 moonbit_wm_ipc_recv 确认有消息。
+ */
+MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_get_message(
+    int window_id)
+{
+    /* 返回编码为 moonbit_bytes_t：message_type|subtype|null|data */
+    /* 这是一个简化实现，返回格式化的字符串 */
+    static __thread char static_buf[8192];
+    static_buf[0] = '\0';
+
+    ipc_recv_queue_t *q = get_recv_queue(window_id);
+    if (!q)
+        return moonbit_make_bytes_raw(0);
+
+    pthread_mutex_lock(&q->mutex);
+    if (!q->has_message)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return moonbit_make_bytes_raw(0);
+    }
+
+    /* 构建返回数据 */
+    snprintf(static_buf, sizeof(static_buf),
+             "%d|%s|%s",
+             (int)q->message_type,
+             q->subtype ? q->subtype : "",
+             q->data ? q->data : "");
+
+    q->has_message = 0;
+    if (q->data)
+    {
+        free(q->data);
+        q->data = NULL;
+    }
+    q->data_length = 0;
+    pthread_mutex_unlock(&q->mutex);
+
+    size_t len = strlen(static_buf);
+    moonbit_bytes_t result = moonbit_make_bytes_raw((int32_t)len);
+    memcpy(result, static_buf, len);
+    return result;
+}
+
 /*
  * Copy a null-terminated C string into a MoonBit Bytes value.
  *
