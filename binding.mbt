@@ -144,3 +144,129 @@ extern "C" fn webview_binding_is_null(binding : BindingHandle) -> Bool = "moonbi
 /// of the webview callback invocation.
 #borrow(cstr)
 extern "C" fn webview_copy_cstr(cstr : Bytes) -> Bytes = "moonbit_webview_copy_cstr"
+
+///|
+/// Initialize native window manager runtime.
+pub extern "C" fn wm_init(is_main_process : Int) -> Int = "moonbit_wm_init"
+
+///|
+/// Cleanup native window manager runtime.
+pub extern "C" fn wm_cleanup() -> Unit = "moonbit_wm_cleanup"
+
+///|
+/// Create a managed native window and register it in WM.
+#borrow(title, url)
+pub extern "C" fn wm_create_window(
+  title : Bytes,
+  url : Bytes,
+  width : Int,
+  height : Int,
+  x : Int,
+  y : Int,
+  has_x : Int,
+  has_y : Int,
+  parent_window_id : Int,
+) -> Int = "moonbit_wm_create_window"
+
+///|
+/// Destroy managed window.
+pub extern "C" fn wm_destroy_window(window_id : Int) -> Int = "moonbit_wm_destroy_window"
+
+///|
+/// Run managed window event loop.
+pub extern "C" fn wm_run_window(window_id : Int) -> Int = "moonbit_wm_run_window"
+
+///|
+/// Request window termination.
+pub extern "C" fn wm_terminate_window(window_id : Int) -> Int = "moonbit_wm_terminate_window"
+
+///|
+/// Set managed window title.
+#borrow(title)
+pub extern "C" fn wm_set_title(window_id : Int, title : Bytes) -> Int = "moonbit_wm_set_title"
+
+///|
+/// Set managed window size.
+pub extern "C" fn wm_set_size(window_id : Int, width : Int, height : Int, hints : Int) -> Int = "moonbit_wm_set_size"
+
+///|
+/// Navigate managed window to URL.
+#borrow(url)
+pub extern "C" fn wm_navigate(window_id : Int, url : Bytes) -> Int = "moonbit_wm_navigate"
+
+///|
+/// Set managed window HTML.
+#borrow(html)
+pub extern "C" fn wm_set_html(window_id : Int, html : Bytes) -> Int = "moonbit_wm_set_html"
+
+///|
+/// Eval JS in managed window.
+#borrow(js)
+pub extern "C" fn wm_eval_js(window_id : Int, js : Bytes) -> Int = "moonbit_wm_eval_js"
+
+///|
+/// Init JS in managed window.
+#borrow(js)
+pub extern "C" fn wm_init_js(window_id : Int, js : Bytes) -> Int = "moonbit_wm_init_js"
+
+///|
+/// Set managed window visibility.
+pub extern "C" fn wm_set_visibility(window_id : Int, visible : Int) -> Int = "moonbit_webview_set_window_visibility"
+
+///|
+/// Get managed window visibility.
+pub extern "C" fn wm_get_visibility(window_id : Int) -> Int = "moonbit_webview_get_window_visibility"
+
+///|
+/// Query managed window count.
+pub extern "C" fn wm_get_window_count() -> Int = "moonbit_wm_get_window_count"
+
+///|
+/// Query managed window id at index.
+pub extern "C" fn wm_get_window_id_at(index : Int) -> Int = "moonbit_wm_get_window_id_at"
+
+///|
+/// Query managed window state.
+pub extern "C" fn wm_get_window_state(window_id : Int) -> Int = "moonbit_wm_get_window_state"
+
+///|
+/// Query parent window id.
+pub extern "C" fn wm_get_parent_window_id(window_id : Int) -> Int = "moonbit_wm_get_parent_window_id"
+
+///|
+/// Get native handle by managed window id.
+pub extern "C" fn wm_get_handle(window_id : Int) -> WebView_t = "moonbit_wm_get_handle"
+
+///|
+/// Create child-process window.
+#borrow(title, url)
+pub extern "C" fn wm_create_child_window(
+  title : Bytes,
+  url : Bytes,
+  width : Int,
+  height : Int,
+  parent_window_id : Int,
+) -> Int = "moonbit_wm_create_child_window"
+
+///|
+/// Get process type: 0 main, 1 child.
+pub extern "C" fn wm_get_process_type() -> Int = "moonbit_wm_get_process_type"
+
+///|
+/// Get current process id.
+pub extern "C" fn wm_get_process_id() -> Int = "moonbit_wm_get_process_id"
+
+///|
+/// Kill child process.
+pub extern "C" fn wm_kill_child(pid : Int) -> Int = "moonbit_wm_kill_child"
+
+///|
+/// Send asynchronous IPC message.
+#borrow(subtype, data)
+pub extern "C" fn wm_ipc_send(
+  source_window_id : Int,
+  target_window_id : Int,
+  message_type : Int,
+  subtype : Bytes,
+  data : Bytes,
+) -> Int = "moonbit_wm_ipc_send"

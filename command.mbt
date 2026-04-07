@@ -97,6 +97,8 @@ pub fn[X] CommandBridge::new(
     async_handlers: {},
   }
   bridge.webview.bind_raw(binding_name, (raw_id, raw_req) => {
+    // NOTE: WebView::bind_raw already copies C strings into MoonBit Bytes.
+    log(1, "[bridge:new] received callback")
     webview.task_group.spawn_bg(() => bridge.dispatch(raw_id, raw_req))
   })
   bridge.webview.init(make_bridge_script(global_name, binding_name, event_name))
@@ -281,19 +283,15 @@ fn[X] CommandBridge::dispatch_req(
 /// thread and sent with `respond_raw`.
 async fn[X] CommandBridge::dispatch(
   self : CommandBridge[X],
-  raw_id : Bytes,
-  raw_req : Bytes,
+  id_bytes : Bytes,
+  req_bytes : Bytes,
 ) -> Unit noraise {
   log(1, "[bridge:dispatch] invoked")
-  let req_bytes = webview_copy_cstr(raw_req)
-  // `raw_id` is only valid for this callback's lifetime — copy it now so
-  // the async path (if any) can safely use it after this fn returns.
-  let id_bytes = webview_copy_cstr(raw_id)
   let req_str = @encoding/utf8.decode(req_bytes) catch {
     Malformed(e) => {
       log(1, "[bridge:dispatch] utf8 decode error: \{e}")
       let err_wire = CommandResponse::error("req decode failed").to_wire()
-      self.webview.respond_raw(raw_id, 1, err_wire)
+      self.webview.respond_raw(id_bytes, 1, err_wire)
       return
     }
   }
@@ -315,7 +313,7 @@ async fn[X] CommandBridge::dispatch(
           Error(_) => 1
         }
         log(1, "[bridge:dispatch] responding status=\{status}")
-        self.webview.respond_raw(raw_id, status, wire)
+        self.webview.respond_raw(id_bytes, status, wire)
       }
     }
   } catch {
@@ -327,7 +325,7 @@ async fn[X] CommandBridge::dispatch(
         Ok(_) => 0
         Error(_) => 1
       }
-      self.webview.respond_raw(raw_id, status, wire)
+      self.webview.respond_raw(id_bytes, status, wire)
     }
   }
 }

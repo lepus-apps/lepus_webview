@@ -13,7 +13,13 @@ struct SumReply {
 async fn main {
   @async.with_task_group(task_group => {
     task_group.spawn_bg(() => {
-      @webview.WebView::new(task_group)
+      @webview.WebView::new_managed(
+        task_group,
+        title="title",
+        width=800,
+        height=600,
+        debug=1,
+      )
       ..set_title("title")
       ..set_size(800, 600, @webview.SizeHint::None)
       ..install_plugin(

@@ -38,6 +38,7 @@ pub(all) enum SizeHint {
 /// ```
 struct WebView[X] {
   handle : WebView_t
+  window_id : Int
   bindings : Map[String, BindingHandle]
   destroy_hooks : Map[String, () -> Unit]
   task_group : @async.TaskGroup[X]
@@ -91,6 +92,49 @@ pub fn[X] WebView::new(
   }
   WebView::{
     handle: webview_create(debug, 0L),
+    window_id: -1,
+    bindings: {},
+    destroy_hooks: {},
+    task_group,
+    default_plugin_host: None,
+  }
+}
+
+///|
+/// Creates a managed webview window via native WindowManager (IPC-capable).
+///
+/// Window lifecycle operations (`run/destroy/terminate/set_title/set_size/`
+/// `navigate/set_html/eval/init`) will be routed through `wm_*` APIs.
+pub fn[X] WebView::new_managed(
+  task_group : @async.TaskGroup[X],
+  title? : String = "MoonBit WebView",
+  url? : String = "",
+  width? : Int = 800,
+  height? : Int = 600,
+  debug? : Int = 0,
+) -> WebView[X] {
+  ignore(wm_init(1))
+  let window_id = wm_create_window(
+    @encoding/utf8.encode(title),
+    @encoding/utf8.encode(url),
+    width,
+    height,
+    -1,
+    -1,
+    0,
+    0,
+    -1,
+  )
+  guard window_id > 0 else {
+    abort("WebView::new_managed failed: wm_create_window")
+  }
+  let handle = wm_get_handle(window_id)
+  if debug > 0 {
+    set_log_level(debug)
+  }
+  WebView::{
+    handle,
+    window_id,
     bindings: {},
     destroy_hooks: {},
     task_group,
@@ -113,7 +157,11 @@ pub fn[X] WebView::destroy(self : WebView[X]) -> Unit {
   for name, binding in self.bindings {
     webview_unbind(self.handle, @encoding/utf8.encode(name), binding)
   }
-  webview_destroy(self.handle)
+  if self.window_id > 0 {
+    ignore(wm_destroy_window(self.window_id))
+  } else {
+    webview_destroy(self.handle)
+  }
 }
 
 ///|
@@ -130,7 +178,11 @@ pub fn[X] WebView::dispatch(self : WebView[X], callback : () -> Unit) -> Unit {
 /// Stops the main event loop.
 /// Safe to call from a background thread.
 pub fn[X] WebView::terminate(self : WebView[X]) -> Unit {
-  webview_terminate(self.handle) // moonbit_webview_terminate — also sets terminated flag
+  if self.window_id > 0 {
+    ignore(wm_terminate_window(self.window_id))
+  } else {
+    webview_terminate(self.handle) // moonbit_webview_terminate — also sets terminated flag
+  }
 }
 
 ///|
@@ -192,7 +244,11 @@ pub fn[X] WebView::unbind(self : WebView[X], name : String) -> Unit {
 ///|
 /// Updates the title of the native window.
 pub fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
-  webview_set_title(self.handle, @encoding/utf8.encode(title))
+  if self.window_id > 0 {
+    ignore(wm_set_title(self.window_id, @encoding/utf8.encode(title)))
+  } else {
+    webview_set_title(self.handle, @encoding/utf8.encode(title))
+  }
 }
 
 ///|
@@ -206,7 +262,11 @@ pub fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
 /// webview.run()
 /// ```
 pub fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
-  webview_set_html(self.handle, @encoding/utf8.encode(html))
+  if self.window_id > 0 {
+    ignore(wm_set_html(self.window_id, @encoding/utf8.encode(html)))
+  } else {
+    webview_set_html(self.handle, @encoding/utf8.encode(html))
+  }
 }
 
 ///|
@@ -221,7 +281,11 @@ pub fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
 /// webview.run()
 /// ```
 pub fn[X] WebView::navigate(self : WebView[X], url : String) -> Unit {
-  webview_navigate(self.handle, @encoding/utf8.encode(url))
+  if self.window_id > 0 {
+    ignore(wm_navigate(self.window_id, @encoding/utf8.encode(url)))
+  } else {
+    webview_navigate(self.handle, @encoding/utf8.encode(url))
+  }
 }
 
 ///|
@@ -249,14 +313,22 @@ pub fn[X] WebView::get_handle(self : WebView[X]) -> WebView_t {
 /// Evaluates arbitrary JavaScript code.
 /// Use bindings if you need to receive a result.
 pub fn[X] WebView::eval(self : WebView[X], js : String) -> Unit {
-  webview_eval(self.handle, @encoding/utf8.encode(js))
+  if self.window_id > 0 {
+    ignore(wm_eval_js(self.window_id, @encoding/utf8.encode(js)))
+  } else {
+    webview_eval(self.handle, @encoding/utf8.encode(js))
+  }
 }
 
 ///|
 /// Injects JavaScript code executed immediately on every page load,
 /// before `window.onload`.
 pub fn[X] WebView::init(self : WebView[X], js : String) -> Unit {
-  webview_init(self.handle, @encoding/utf8.encode(js))
+  if self.window_id > 0 {
+    ignore(wm_init_js(self.window_id, @encoding/utf8.encode(js)))
+  } else {
+    webview_init(self.handle, @encoding/utf8.encode(js))
+  }
 }
 
 ///|
@@ -315,7 +387,11 @@ pub fn[X] WebView::set_size(
   height : Int,
   hints : SizeHint,
 ) -> Unit {
-  webview_set_size(self.handle, width, height, hints)
+  if self.window_id > 0 {
+    ignore(wm_set_size(self.window_id, width, height, 0))
+  } else {
+    webview_set_size(self.handle, width, height, hints)
+  }
 }
 
 ///|
@@ -326,7 +402,11 @@ pub fn[X] WebView::set_size(
 /// `moonbitlang/async` and automatically drives any registered async handlers.
 pub fn[X] WebView::run(self : WebView[X]) -> Unit {
   self.task_group.spawn_bg(() => {
-    webview_run(self.handle)
+    if self.window_id > 0 {
+      ignore(wm_run_window(self.window_id))
+    } else {
+      webview_run(self.handle)
+    }
     self.destroy()
   })
 }
