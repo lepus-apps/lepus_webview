@@ -78,6 +78,9 @@ fn[X] WebView::new_managed(
   resizable? : Bool = true,
   always_on_top? : Bool = false,
   transparent? : Bool = false,
+  title_bar_style? : TitleBarStyle = Default,
+  title_bar_overlay? : Bool = false,
+  traffic_light_position? : TrafficLightPosition = { x: -1, y: -1 },
 ) -> WebView[X] {
   let window_id = wm_create_window(
     @encoding/utf8.encode(title),
@@ -120,8 +123,23 @@ fn[X] WebView::new_managed(
       } else {
         0
       },
+      title_bar_style,
+      if title_bar_overlay {
+        1
+      } else {
+        0
+      },
     ),
   )
+  if traffic_light_position.x >= 0 && traffic_light_position.y >= 0 {
+    ignore(
+      wm_set_traffic_light_position(
+        window_id,
+        traffic_light_position.x,
+        traffic_light_position.y,
+      ),
+    )
+  }
   WebView::{ handle, window_id, task_group }
 }
 
@@ -254,6 +272,8 @@ pub fn[X] WebView::set_window_customization(
   resizable : Bool,
   always_on_top : Bool,
   transparent : Bool,
+  title_bar_style : TitleBarStyle,
+  title_bar_overlay : Bool,
 ) -> Unit {
   ignore(
     wm_set_window_customization(
@@ -278,14 +298,32 @@ pub fn[X] WebView::set_window_customization(
       } else {
         0
       },
+      title_bar_style,
+      if title_bar_overlay {
+        1
+      } else {
+        0
+      },
     ),
   )
+}
+
+///|
+/// Set macOS traffic-light buttons position.
+pub fn[X] WebView::set_traffic_light_position(
+  self : WebView[X],
+  x : Int,
+  y : Int,
+) -> Unit {
+  ignore(wm_set_traffic_light_position(self.window_id, x, y))
 }
 
 ///|
 /// Injects CSS helper classes for Electron-like drag regions.
 ///
 /// - `.lepus-drag`: draggable zone (`-webkit-app-region: drag`)
+/// - `.lepus-titlebar`: titlebar draggable zone (`-webkit-app-region: drag`)
+/// - `[data-lepus-drag="true"]`: draggable zone (`-webkit-app-region: drag`)
 /// - `.lepus-no-drag`: interactive zone (`-webkit-app-region: no-drag`)
 pub fn[X] WebView::enable_custom_titlebar_support(self : WebView[X]) -> Unit {
   self.init(
@@ -295,6 +333,8 @@ pub fn[X] WebView::enable_custom_titlebar_support(self : WebView[X]) -> Unit {
       #|  const style = document.createElement('style');
       #|  style.textContent = [
       #|    '.lepus-drag { -webkit-app-region: drag; app-region: drag; user-select: none; }',
+      #|    '.lepus-titlebar { -webkit-app-region: drag; app-region: drag; user-select: none; }',
+      #|    '[data-lepus-drag=\"true\"] { -webkit-app-region: drag; app-region: drag; user-select: none; }',
       #|    '.lepus-no-drag { -webkit-app-region: no-drag; app-region: no-drag; }',
       #|  ].join('');
       #|  document.documentElement.appendChild(style);
@@ -368,6 +408,12 @@ pub fn[X] WebView::set_fullscreen(self : WebView[X], fullscreen : Bool) -> Unit 
 /// Toggle native fullscreen state.
 pub fn[X] WebView::toggle_fullscreen(self : WebView[X]) -> Unit {
   ignore(wm_toggle_fullscreen_window(self.window_id))
+}
+
+///|
+/// Start native window drag/move gesture.
+pub fn[X] WebView::start_drag(self : WebView[X]) -> Unit {
+  ignore(wm_start_drag_window(self.window_id))
 }
 
 ///|

@@ -1474,10 +1474,23 @@ static void *moonbit_window_native_handle(webview_window_t *w)
 #ifdef __APPLE__
 typedef void *mb_id_t;
 typedef void *mb_sel_t;
+typedef struct
+{
+    double x;
+    double y;
+} mb_point_t;
+typedef struct
+{
+    double x;
+    double y;
+    double width;
+    double height;
+} mb_rect_t;
 typedef mb_sel_t (*mb_sel_register_name_t)(const char *);
 typedef mb_id_t (*mb_objc_get_class_t)(const char *);
 typedef unsigned long (*mb_objc_msgsend_u64_t)(mb_id_t, mb_sel_t);
 typedef mb_id_t (*mb_objc_msgsend_id_ret_t)(mb_id_t, mb_sel_t);
+typedef mb_rect_t (*mb_objc_msgsend_rect_ret_t)(mb_id_t, mb_sel_t);
 typedef mb_id_t (*mb_objc_msgsend_cstr_arg_ret_t)(mb_id_t, mb_sel_t, const char *);
 typedef mb_id_t (*mb_objc_msgsend_int_arg_ret_t)(mb_id_t, mb_sel_t, int);
 typedef mb_id_t (*mb_objc_msgsend_u64_arg_ret_t)(mb_id_t, mb_sel_t, unsigned long);
@@ -1486,6 +1499,7 @@ typedef void (*mb_objc_msgsend_long_arg_t)(mb_id_t, mb_sel_t, long);
 typedef void (*mb_objc_msgsend_int_arg_t)(mb_id_t, mb_sel_t, int);
 typedef void (*mb_objc_msgsend_id_arg_t)(mb_id_t, mb_sel_t, mb_id_t);
 typedef void (*mb_objc_msgsend_id_id_arg_t)(mb_id_t, mb_sel_t, mb_id_t, mb_id_t);
+typedef void (*mb_objc_msgsend_point_arg_t)(mb_id_t, mb_sel_t, mb_point_t);
 
 static void *moonbit_objc_msgsend_symbol(void)
 {
@@ -1538,7 +1552,9 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     int frameless,
     int resizable,
     int always_on_top,
-    int transparent)
+    int transparent,
+    int title_bar_style,
+    int title_bar_overlay)
 {
     pthread_mutex_lock(&g_wm.mutex);
     webview_window_t *w = find_window(window_id);
@@ -1550,8 +1566,9 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     HWND hwnd = (HWND)moonbit_window_native_handle(w);
     if (!hwnd)
         return -1;
+    int hidden_title_bar = title_bar_style == 1;
     LONG style = GetWindowLong(hwnd, GWL_STYLE);
-    if (frameless)
+    if (frameless && !title_bar_overlay && !hidden_title_bar)
         style &= ~(WS_CAPTION | WS_THICKFRAME);
     else
         style |= WS_CAPTION;
@@ -1584,6 +1601,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     void *msgsend = moonbit_objc_msgsend_symbol();
     if (!ns_window || !msgsend)
         return -1;
+    int hidden_title_bar = title_bar_style == 1;
     mb_sel_t sel_style_mask = moonbit_sel_register_name("styleMask");
     mb_sel_t sel_set_style_mask = moonbit_sel_register_name("setStyleMask:");
     if (!sel_style_mask || !sel_set_style_mask)
@@ -1594,7 +1612,12 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     const unsigned long NSWindowStyleMaskMiniaturizable = 1UL << 2;
     const unsigned long NSWindowStyleMaskResizable = 1UL << 3;
     const unsigned long NSWindowStyleMaskFullSizeContentView = 1UL << 15;
-    if (frameless)
+    if (hidden_title_bar)
+    {
+        style |= (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
+        style |= NSWindowStyleMaskFullSizeContentView;
+    }
+    else if (frameless)
     {
         style &= ~(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
         style |= NSWindowStyleMaskFullSizeContentView;
@@ -1609,7 +1632,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     else
         style &= ~NSWindowStyleMaskResizable;
     ((mb_objc_msgsend_u64_arg_t)msgsend)((mb_id_t)ns_window, sel_set_style_mask, style);
-    if (frameless)
+    if (frameless || hidden_title_bar || title_bar_overlay)
     {
         ((mb_objc_msgsend_long_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("setTitleVisibility:"), 1L);
         ((mb_objc_msgsend_int_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("setTitlebarAppearsTransparent:"), 1);
@@ -1665,6 +1688,61 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     (void)resizable;
     (void)always_on_top;
     (void)transparent;
+    (void)title_bar_style;
+    (void)title_bar_overlay;
+    return 0;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_set_traffic_light_position(int window_id, int x, int y)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+#ifdef __APPLE__
+    void *ns_window = moonbit_window_native_handle(w);
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
+        return -1;
+    mb_sel_t sel_standard_button = moonbit_sel_register_name("standardWindowButton:");
+    mb_sel_t sel_superview = moonbit_sel_register_name("superview");
+    mb_sel_t sel_frame = moonbit_sel_register_name("frame");
+    mb_sel_t sel_set_frame_origin = moonbit_sel_register_name("setFrameOrigin:");
+    if (!sel_standard_button || !sel_superview || !sel_frame || !sel_set_frame_origin)
+        return -1;
+
+    mb_id_t close_btn = ((mb_objc_msgsend_int_arg_ret_t)msgsend)((mb_id_t)ns_window, sel_standard_button, 0);
+    mb_id_t mini_btn = ((mb_objc_msgsend_int_arg_ret_t)msgsend)((mb_id_t)ns_window, sel_standard_button, 1);
+    mb_id_t zoom_btn = ((mb_objc_msgsend_int_arg_ret_t)msgsend)((mb_id_t)ns_window, sel_standard_button, 2);
+    if (!close_btn || !mini_btn || !zoom_btn)
+        return -1;
+
+    mb_id_t titlebar = ((mb_objc_msgsend_id_ret_t)msgsend)(close_btn, sel_superview);
+    if (!titlebar)
+        return -1;
+
+    mb_rect_t titlebar_frame = ((mb_objc_msgsend_rect_ret_t)msgsend)(titlebar, sel_frame);
+    mb_rect_t close_frame = ((mb_objc_msgsend_rect_ret_t)msgsend)(close_btn, sel_frame);
+    mb_rect_t mini_frame = ((mb_objc_msgsend_rect_ret_t)msgsend)(mini_btn, sel_frame);
+    mb_rect_t zoom_frame = ((mb_objc_msgsend_rect_ret_t)msgsend)(zoom_btn, sel_frame);
+
+    double spacing = 6.0;
+    double btn_y = titlebar_frame.height - (double)y - close_frame.height;
+    if (btn_y < 0)
+        btn_y = 0;
+    mb_point_t close_origin = {(double)x, btn_y};
+    mb_point_t mini_origin = {close_origin.x + close_frame.width + spacing, btn_y};
+    mb_point_t zoom_origin = {mini_origin.x + mini_frame.width + spacing, btn_y};
+
+    ((mb_objc_msgsend_point_arg_t)msgsend)(close_btn, sel_set_frame_origin, close_origin);
+    ((mb_objc_msgsend_point_arg_t)msgsend)(mini_btn, sel_set_frame_origin, mini_origin);
+    ((mb_objc_msgsend_point_arg_t)msgsend)(zoom_btn, sel_set_frame_origin, zoom_origin);
+    return 0;
+#else
+    (void)x;
+    (void)y;
     return 0;
 #endif
 }
@@ -1822,6 +1900,44 @@ MOONBIT_FFI_EXPORT int moonbit_wm_toggle_fullscreen_window(int window_id)
         return -1;
     int next = w->fullscreen ? 0 : 1;
     return moonbit_wm_set_fullscreen_window(window_id, next);
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_start_drag_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+#ifdef _WIN32
+    HWND hwnd = (HWND)moonbit_window_native_handle(w);
+    if (!hwnd)
+        return -1;
+    ReleaseCapture();
+    SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+    return 0;
+#elif defined(__APPLE__)
+    void *ns_window = moonbit_window_native_handle(w);
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
+        return -1;
+    mb_id_t ns_app = moonbit_objc_get_class("NSApplication");
+    mb_sel_t sel_shared = moonbit_sel_register_name("sharedApplication");
+    mb_sel_t sel_current_event = moonbit_sel_register_name("currentEvent");
+    mb_sel_t sel_drag = moonbit_sel_register_name("performWindowDragWithEvent:");
+    if (!ns_app || !sel_shared || !sel_current_event || !sel_drag)
+        return -1;
+    mb_id_t app = ((mb_objc_msgsend_id_ret_t)msgsend)(ns_app, sel_shared);
+    if (!app)
+        return -1;
+    mb_id_t event = ((mb_objc_msgsend_id_ret_t)msgsend)(app, sel_current_event);
+    if (!event)
+        return -1;
+    ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, sel_drag, event);
+    return 0;
+#else
+    return -1;
+#endif
 }
 
 MOONBIT_FFI_EXPORT int moonbit_wm_close_window(int window_id)

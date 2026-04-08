@@ -146,6 +146,27 @@ fn[X] CommandBridge::send_response(
 ///
 /// The callback is an async function. It will be spawned as a background task
 /// so it doesn't block the webview event loop.
+fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_sync(
+  self : CommandBridge[X],
+  name : String,
+  callback : (Payload) -> Reply,
+) -> Unit {
+  self.handlers.set(name, fn(json, id, bridge) {
+    let payload = @json.from_json(json) catch {
+      msg => {
+        bridge.send_response(id, CommandResponse::error("\{msg}"))
+        return
+      }
+    }
+    bridge.send_response(id, CommandResponse::ok(callback(payload)))
+  })
+}
+
+///|
+/// Registers an async typed command handler.
+///
+/// The callback is an async function. It will be spawned as a background task
+/// so it doesn't block the webview event loop.
 fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_async(
   self : CommandBridge[X],
   name : String,
