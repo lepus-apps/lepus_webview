@@ -26,70 +26,6 @@ pub type BindingHandle
 #external
 pub type IpcMessageHandle
 
-// ── Lifecycle ────────────────────────────────────────────────────────────────
-
-///|
-extern "C" fn webview_create(debug : Int, window : Int64) -> WebView_t = "webview_create"
-
-///|
-extern "C" fn webview_destroy(w : WebView_t) -> Unit = "webview_destroy"
-
-///|
-extern "C" fn webview_run(w : WebView_t) -> Unit = "webview_run"
-
-///|
-/// Wraps webview_terminate and also sets the internal terminated flag so
-/// `webview_is_terminated()` returns true.  Use this instead of the bare
-/// `webview_terminate` so that the async run-loop can observe termination.
-extern "C" fn webview_terminate(w : WebView_t) -> Unit = "moonbit_webview_terminate"
-
-// ── Window ───────────────────────────────────────────────────────────────────
-
-///|
-#borrow(title)
-extern "C" fn webview_set_title(w : WebView_t, title : Bytes) -> Unit = "webview_set_title"
-
-///|
-extern "C" fn webview_set_size(
-  w : WebView_t,
-  width : Int,
-  height : Int,
-  hint : SizeHint,
-) -> Unit = "webview_set_size"
-
-// ── Navigation ───────────────────────────────────────────────────────────────
-
-///|
-#borrow(url)
-extern "C" fn webview_navigate(w : WebView_t, url : Bytes) -> Unit = "webview_navigate"
-
-///|
-#borrow(html)
-extern "C" fn webview_set_html(w : WebView_t, html : Bytes) -> Unit = "webview_set_html"
-
-// ── JavaScript ───────────────────────────────────────────────────────────────
-
-///|
-#borrow(js)
-extern "C" fn webview_init(w : WebView_t, js : Bytes) -> Unit = "webview_init"
-
-///|
-#borrow(js)
-extern "C" fn webview_eval(w : WebView_t, js : Bytes) -> Unit = "webview_eval"
-
-// ── Dispatch ─────────────────────────────────────────────────────────────────
-
-///|
-/// Schedule `closure` on the webview UI thread.
-/// `call_closure` is a closed FuncRef trampoline; `closure` is the MoonBit
-/// callback whose ownership transfers to C until it is invoked once.
-#owned(closure)
-extern "C" fn webview_dispatch(
-  w : WebView_t,
-  call_closure : FuncRef[(WebView_t, () -> Unit) -> Unit],
-  closure : () -> Unit,
-) -> Unit = "webview_dispatch"
-
 // ── Bindings ─────────────────────────────────────────────────────────────────
 
 ///|
@@ -104,33 +40,6 @@ extern "C" fn webview_bind(
   call_closure : FuncRef[(Bytes, Bytes, (Bytes, Bytes) -> Unit) -> Unit],
   closure : (Bytes, Bytes) -> Unit,
 ) -> BindingHandle = "moonbit_webview_bind"
-
-///|
-/// Unbind and free the native binding record.
-/// `name` is borrowed; the binding handle is consumed (freed) by C.
-#borrow(name)
-extern "C" fn webview_unbind(
-  w : WebView_t,
-  name : Bytes,
-  binding : BindingHandle,
-) -> Unit = "moonbit_webview_unbind"
-
-///|
-/// Respond to a binding call using raw borrowed C-string pointers.
-/// `seq` is the pointer received in the bind trampoline — it is valid only
-/// during the callback invocation and must not be stored.
-/// `result` is a MoonBit Bytes value (null-terminated by the runtime).
-#borrow(seq, result)
-extern "C" fn webview_return_raw(
-  w : WebView_t,
-  seq : Bytes,
-  status : Int,
-  result : Bytes,
-) -> Unit = "moonbit_webview_return_raw"
-
-///|
-/// Returns true when a BindingHandle is null (webview_bind failed).
-extern "C" fn webview_binding_is_null(binding : BindingHandle) -> Bool = "moonbit_is_null"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -195,7 +104,12 @@ pub extern "C" fn wm_set_title(window_id : Int, title : Bytes) -> Int = "moonbit
 
 ///|
 /// Set managed window size.
-pub extern "C" fn wm_set_size(window_id : Int, width : Int, height : Int, hints : Int) -> Int = "moonbit_wm_set_size"
+pub extern "C" fn wm_set_size(
+  window_id : Int,
+  width : Int,
+  height : Int,
+  hints : SizeHint,
+) -> Int = "moonbit_wm_set_size"
 
 ///|
 /// Navigate managed window to URL.
@@ -274,10 +188,7 @@ pub extern "C" fn wm_fork_process() -> Int = "moonbit_wm_fork_process"
 ///|
 /// Spawn a fresh child process by executing the given program path with one extra argument.
 #borrow(program, arg1)
-pub extern "C" fn wm_spawn_process(
-  program : Bytes,
-  arg1 : Bytes,
-) -> Int = "moonbit_wm_spawn_process"
+pub extern "C" fn wm_spawn_process(program : Bytes, arg1 : Bytes) -> Int = "moonbit_wm_spawn_process"
 
 ///|
 /// Connect the current process to the parent's IPC server and switch WM into child mode.
@@ -340,9 +251,7 @@ pub extern "C" fn wm_ipc_recv(window_id : Int) -> Int = "moonbit_wm_ipc_recv"
 ///|
 /// Get the last received IPC message data.
 /// Returns (message_type, subtype, data) as (Int, Bytes, Bytes).
-pub extern "C" fn wm_ipc_get_message(
-  window_id : Int,
-) -> (Int, Bytes, Bytes) = "moonbit_wm_ipc_get_message"
+pub extern "C" fn wm_ipc_get_message(window_id : Int) -> (Int, Bytes, Bytes) = "moonbit_wm_ipc_get_message"
 
 ///|
 /// Pop the next queued IPC message snapshot for the given queue id.

@@ -18,20 +18,13 @@ pub(all) enum CommandResponse {
 } derive(Eq)
 
 ///|
-pub fn[Payload : ToJson] CommandResponse::ok(
-  payload : Payload,
-) -> CommandResponse {
+fn[Payload : ToJson] CommandResponse::ok(payload : Payload) -> CommandResponse {
   Ok(payload.to_json())
 }
 
 ///|
-pub fn CommandResponse::error(message : String) -> CommandResponse {
+fn CommandResponse::error(message : String) -> CommandResponse {
   Error(message)
-}
-
-///|
-pub fn CommandResponse::is_ok(self : CommandResponse) -> Bool {
-  self is Ok(_)
 }
 
 ///|
@@ -60,7 +53,7 @@ struct CommandBridge[X] {
 
 ///|
 /// Creates and starts a command bridge for the given webview.
-pub fn[X] CommandBridge::new(
+fn[X] CommandBridge::new(
   webview : WebView[X],
   global_name? : String = "MoonBitBridge",
   event_name? : String = "moonbit:command",
@@ -79,17 +72,7 @@ pub fn[X] CommandBridge::new(
 }
 
 ///|
-pub fn[X] CommandBridge::global_name(self : CommandBridge[X]) -> String {
-  self.global_name
-}
-
-///|
-pub fn[X] CommandBridge::event_name(self : CommandBridge[X]) -> String {
-  self.event_name
-}
-
-///|
-pub fn[X] CommandBridge::destroy(self : CommandBridge[X]) -> Unit {
+fn[X] CommandBridge::destroy(self : CommandBridge[X]) -> Unit {
   self.handlers.clear()
 }
 
@@ -173,7 +156,7 @@ fn[X] CommandBridge::send_response(
 ///
 /// The callback is an async function. It will be spawned as a background task
 /// so it doesn't block the webview event loop.
-pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_async(
+fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_async(
   self : CommandBridge[X],
   name : String,
   callback : async (Payload) -> Reply,
@@ -193,49 +176,11 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_async(
 }
 
 ///|
-/// Registers a typed command handler (synchronous).
-pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle(
-  self : CommandBridge[X],
-  name : String,
-  callback : (Payload) -> Reply,
-) -> Unit {
-  self.handlers.set(name, fn(json, id, bridge) {
-    let payload = @json.from_json(json) catch {
-      msg => {
-        bridge.send_response(id, CommandResponse::error("\{msg}"))
-        return
-      }
-    }
-    let reply = callback(payload)
-    bridge.send_response(id, CommandResponse::ok(reply))
-  })
-}
-
-///|
-/// Registers a typed command handler that can raise errors.
-pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result(
-  self : CommandBridge[X],
-  name : String,
-  callback : (Payload) -> Reply raise,
-) -> Unit {
-  self.handlers.set(name, fn(json, id, bridge) {
-    let payload = @json.from_json(json) catch {
-      msg => {
-        bridge.send_response(id, CommandResponse::error("\{msg}"))
-        return
-      }
-    }
-    let reply = try? callback(payload)
-    bridge.send_response(id, CommandResponse::ok(reply))
-  })
-}
-
-///|
 /// Registers a typed command handler that runs on a detached native thread.
 ///
 /// This is useful when the callback performs blocking work that should not hold
 /// the webview UI thread, while still responding asynchronously to JavaScript.
-pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_bg(
+fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_bg(
   self : CommandBridge[X],
   name : String,
   callback : (Payload) -> Reply raise,
@@ -258,7 +203,7 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result
 
 ///|
 /// Registers an async typed command handler that can raise errors.
-pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_async(
+fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_async(
   self : CommandBridge[X],
   name : String,
   callback : async (Payload) -> Reply raise Error,
@@ -279,7 +224,7 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result
 
 ///|
 /// Pushes a fire-and-forget event to JavaScript.
-pub fn[X, Payload : ToJson] CommandBridge::send(
+fn[X, Payload : ToJson] CommandBridge::send(
   self : CommandBridge[X],
   name : String,
   payload : Payload,

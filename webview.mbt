@@ -9,7 +9,7 @@ pub(all) enum SizeHint {
   Max = 2
   /// Window size can not be changed by a user.
   Fixed = 3
-} derive(Show)
+}
 
 ///|
 /// An instance of a webview window (managed via IPC).
@@ -49,14 +49,14 @@ let webview_log_level : Ref[Int] = { val: 0 }
 /// - `0` — silent (default)
 /// - `1` — info: lifecycle events (registered commands, invocations, responses)
 /// - `2` — verbose: full request/response payloads
-pub fn set_log_level(level : Int) -> Unit {
+fn set_log_level(level : Int) -> Unit {
   webview_log_level.val = level
 }
 
 ///|
 /// Emit a log line if `level` ≤ the current log level.
 /// The prefix is always included so grep filtering works without extra tooling.
-pub fn log(level : Int, msg : String) -> Unit {
+fn log(level : Int, msg : String) -> Unit {
   if level <= webview_log_level.val {
     println(msg)
   }
@@ -67,7 +67,7 @@ pub fn log(level : Int, msg : String) -> Unit {
 ///
 /// Window lifecycle operations (`terminate/set_title/set_size/`
 /// `navigate/set_html/eval/init`) will be routed through `wm_*` APIs.
-pub fn[X] WebView::new_managed(
+fn[X] WebView::new_managed(
   task_group : @async.TaskGroup[X],
   title? : String = "MoonBit WebView",
   url? : String = "",
@@ -93,30 +93,26 @@ pub fn[X] WebView::new_managed(
   if debug > 0 {
     set_log_level(debug)
   }
-  WebView::{
-    handle,
-    window_id,
-    task_group,
-  }
+  WebView::{ handle, window_id, task_group }
 }
 
 ///|
 /// Destroys the webview and closes the window.
 /// Safe to call from a background thread.
-pub fn[X] WebView::destroy(self : WebView[X]) -> Unit {
+fn[X] WebView::destroy(self : WebView[X]) -> Unit {
   ignore(wm_destroy_window(self.window_id))
 }
 
 ///|
 /// Stops the main event loop.
 /// Safe to call from a background thread.
-pub fn[X] WebView::terminate(self : WebView[X]) -> Unit {
+fn[X] WebView::terminate(self : WebView[X]) -> Unit {
   ignore(wm_terminate_window(self.window_id))
 }
 
 ///|
 /// Updates the title of the native window.
-pub fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
+fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
   ignore(wm_set_title(self.window_id, @encoding/utf8.encode(title)))
 }
 
@@ -129,7 +125,7 @@ pub fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
 /// webview.set_html("<html><body><h1>Hello, World!</h1></body></html>")
 /// webview.terminate()
 /// ```
-pub fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
+fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
   ignore(wm_set_html(self.window_id, @encoding/utf8.encode(html)))
 }
 
@@ -143,32 +139,32 @@ pub fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
 /// webview.navigate("data:text/html,<h1>Hello</h1>")
 /// webview.terminate()
 /// ```
-pub fn[X] WebView::navigate(self : WebView[X], url : String) -> Unit {
+fn[X] WebView::navigate(self : WebView[X], url : String) -> Unit {
   ignore(wm_navigate(self.window_id, @encoding/utf8.encode(url)))
 }
 
 ///|
 /// Returns the raw `WebView_t` handle.
-pub fn[X] WebView::get_handle(self : WebView[X]) -> WebView_t {
+fn[X] WebView::get_handle(self : WebView[X]) -> WebView_t {
   self.handle
 }
 
 ///|
 /// Returns the managed window id.
-pub fn[X] WebView::window_id(self : WebView[X]) -> Int {
+fn[X] WebView::window_id(self : WebView[X]) -> Int {
   self.window_id
 }
 
 ///|
 /// Evaluates arbitrary JavaScript code.
-pub fn[X] WebView::eval(self : WebView[X], js : String) -> Unit {
+fn[X] WebView::eval(self : WebView[X], js : String) -> Unit {
   ignore(wm_eval_js(self.window_id, @encoding/utf8.encode(js)))
 }
 
 ///|
 /// Injects JavaScript code executed immediately on every page load,
 /// before `window.onload`.
-pub fn[X] WebView::init(self : WebView[X], js : String) -> Unit {
+fn[X] WebView::init(self : WebView[X], js : String) -> Unit {
   ignore(wm_init_js(self.window_id, @encoding/utf8.encode(js)))
 }
 
@@ -178,18 +174,18 @@ pub fn[X] WebView::init(self : WebView[X], js : String) -> Unit {
 /// Remarks:
 /// - `SizeHint::Max` is not supported with GTK 4.
 /// - GTK 4 can only set a default size early in the window lifecycle.
-pub fn[X] WebView::set_size(
+fn[X] WebView::set_size(
   self : WebView[X],
   width : Int,
   height : Int,
   hints : SizeHint,
 ) -> Unit {
-  ignore(wm_set_size(self.window_id, width, height, 0))
+  ignore(wm_set_size(self.window_id, width, height, hints))
 }
 
 ///|
 /// Runs the main event loop until terminated, then destroys the webview.
-pub fn[X] WebView::run(self : WebView[X]) -> Unit {
+fn[X] WebView::run(self : WebView[X]) -> Unit {
   ignore(wm_run_window(self.window_id))
   self.destroy()
 }

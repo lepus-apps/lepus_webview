@@ -23,17 +23,17 @@ async test {
 
 ///|
 fn main {
-  let app = @webview.ManagedApp::new(title="title", width=800, height=600)
-  app.install(
-    @webview.ManagedPlugin::new("math", plugin => {
+  let window = @webview.Window::new(title="title", width=800, height=600)
+  window.install(
+    @webview.Plugin::new("math", plugin => {
       plugin.command("sum", (payload : SumPayload) => SumReply::{
         total: payload.left + payload.right,
       })
       plugin.command_async("sum_async", sum_async_handler)
     }),
   )
-  app.install(
-    @webview.ManagedPlugin::new("console", plugin => {
+  window.install(
+    @webview.Plugin::new("console", plugin => {
       plugin.command("log", (payload : String) => {
         println("[child-console:log] \{payload}")
         payload
@@ -44,7 +44,7 @@ fn main {
       })
     }),
   )
-  app.set_html(
+  window.set_html(
     (
       #|<p>Hello Lepus</p>
       #|<button id="sum-btn">Sum 2 + 3</button>
@@ -66,5 +66,5 @@ fn main {
       #|</script>
     ),
   )
-  app.run()
+  window.run()
 }

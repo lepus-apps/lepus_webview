@@ -16,7 +16,7 @@
 /// `on_install` runs after the plugin has finished registering commands and
 /// JS helpers on the host. `on_destroy` runs when the owning plugin host
 /// is destroyed.
-struct Plugin[X] {
+struct PluginInternal[X] {
   name : String
   register : (PluginContext[X]) -> Unit
   on_install : (PluginContext[X]) -> Unit
@@ -56,13 +56,13 @@ pub struct PluginEvent {
 
 ///|
 /// Builds a plugin value that can later be installed on a `PluginHost`.
-pub fn[X] Plugin::new(
+pub fn[X] PluginInternal::new(
   name : String,
   register : (PluginContext[X]) -> Unit,
   on_install? : (PluginContext[X]) -> Unit = fn(_context) {  },
   on_destroy? : (PluginContext[X]) -> Unit = fn(_context) {  },
-) -> Plugin[X] {
-  Plugin::{ name, register, on_install, on_destroy }
+) -> PluginInternal[X] {
+  PluginInternal::{ name, register, on_install, on_destroy }
 }
 
 ///|
@@ -85,7 +85,10 @@ pub fn[X] PluginHost::new(
 ///
 /// This aborts if another plugin with the same name has already been
 /// installed on this host.
-pub fn[X] PluginHost::install(self : PluginHost[X], plugin : Plugin[X]) -> Unit {
+pub fn[X] PluginHost::install(
+  self : PluginHost[X],
+  plugin : PluginInternal[X],
+) -> Unit {
   guard !is_reserved_plugin_name(plugin.name) else {
     abort("PluginHost::install: reserved plugin name: " + plugin.name)
   }
@@ -127,7 +130,7 @@ pub fn[X] PluginHost::command_bridge(self : PluginHost[X]) -> CommandBridge[X] {
 /// JavaScript receives these events through
 /// `window.MoonBitPlugins[plugin_name]["@@on"](...)` and
 /// `window.MoonBitPlugins[plugin_name]["@@onEvent"](...)`.
-pub fn[X, Payload : ToJson] PluginHost::emit(
+fn[X, Payload : ToJson] PluginHost::emit(
   self : PluginHost[X],
   plugin_name : String,
   event_name : String,
@@ -147,58 +150,6 @@ pub fn[X, Payload : ToJson] PluginHost::emit(
 /// Returns the plugin name currently being installed.
 pub fn[X] PluginContext::name(self : PluginContext[X]) -> String {
   self.plugin_name
-}
-
-///|
-/// Returns the JavaScript global object name used by the owning plugin host.
-pub fn[X] PluginContext::global_name(self : PluginContext[X]) -> String {
-  self.host.global_name
-}
-
-///|
-/// Installs raw JavaScript into the owning plugin host.
-pub fn[X] PluginContext::install_script(
-  self : PluginContext[X],
-  script : String,
-) -> Unit {
-  self.host.install_script(script)
-}
-
-///|
-/// Emits a plugin-scoped event from the main program to JavaScript.
-pub fn[X, Payload : ToJson] PluginContext::emit(
-  self : PluginContext[X],
-  event_name : String,
-  payload : Payload,
-) -> Unit {
-  self.host.emit(self.plugin_name, event_name, payload)
-}
-
-///|
-/// Registers a typed plugin command.
-///
-/// The command becomes callable from JavaScript through:
-/// `window.MoonBitPlugins[plugin_name][api_name](payload)`.
-pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command(
-  self : PluginContext[X],
-  api_name : String,
-  callback : (Payload) -> Reply,
-) -> Unit {
-  self.install_command_api(api_name, command_name => {
-    self.host.bridge.handle(command_name, callback)
-  })
-}
-
-///|
-/// Registers a typed plugin command that can return explicit command errors.
-pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result(
-  self : PluginContext[X],
-  api_name : String,
-  callback : (Payload) -> Reply raise Error,
-) -> Unit {
-  self.install_command_api(api_name, command_name => {
-    self.host.bridge.handle_result(command_name, callback)
-  })
 }
 
 ///|
