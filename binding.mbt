@@ -168,6 +168,10 @@ pub extern "C" fn wm_start_drag_window(window_id : Int) -> Int = "moonbit_wm_sta
 pub extern "C" fn wm_close_window(window_id : Int) -> Int = "moonbit_wm_close_window"
 
 ///|
+/// Enable or disable developer tools integration.
+pub extern "C" fn wm_set_devtools(window_id : Int, enabled : Int) -> Int = "moonbit_wm_set_devtools"
+
+///|
 /// Navigate managed window to URL.
 #borrow(url)
 pub extern "C" fn wm_navigate(window_id : Int, url : Bytes) -> Int = "moonbit_wm_navigate"

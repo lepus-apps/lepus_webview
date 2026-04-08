@@ -1494,6 +1494,7 @@ typedef mb_rect_t (*mb_objc_msgsend_rect_ret_t)(mb_id_t, mb_sel_t);
 typedef mb_id_t (*mb_objc_msgsend_cstr_arg_ret_t)(mb_id_t, mb_sel_t, const char *);
 typedef mb_id_t (*mb_objc_msgsend_int_arg_ret_t)(mb_id_t, mb_sel_t, int);
 typedef mb_id_t (*mb_objc_msgsend_u64_arg_ret_t)(mb_id_t, mb_sel_t, unsigned long);
+typedef int (*mb_objc_msgsend_id_arg_int_ret_t)(mb_id_t, mb_sel_t, mb_id_t);
 typedef void (*mb_objc_msgsend_u64_arg_t)(mb_id_t, mb_sel_t, unsigned long);
 typedef void (*mb_objc_msgsend_long_arg_t)(mb_id_t, mb_sel_t, long);
 typedef void (*mb_objc_msgsend_int_arg_t)(mb_id_t, mb_sel_t, int);
@@ -1544,6 +1545,36 @@ static mb_id_t moonbit_objc_get_class(const char *name)
         loaded = 1;
     }
     return fn ? fn(name) : NULL;
+}
+
+static mb_id_t moonbit_find_wk_webview(mb_id_t view, void *msgsend)
+{
+    if (!view || !msgsend)
+        return NULL;
+    mb_id_t wk_cls = moonbit_objc_get_class("WKWebView");
+    mb_sel_t sel_is_kind = moonbit_sel_register_name("isKindOfClass:");
+    if (wk_cls && sel_is_kind)
+    {
+        if (((mb_objc_msgsend_id_arg_int_ret_t)msgsend)(view, sel_is_kind, wk_cls))
+            return view;
+    }
+    mb_sel_t sel_subviews = moonbit_sel_register_name("subviews");
+    mb_sel_t sel_count = moonbit_sel_register_name("count");
+    mb_sel_t sel_object_at_index = moonbit_sel_register_name("objectAtIndex:");
+    if (!sel_subviews || !sel_count || !sel_object_at_index)
+        return NULL;
+    mb_id_t subviews = ((mb_objc_msgsend_id_ret_t)msgsend)(view, sel_subviews);
+    if (!subviews)
+        return NULL;
+    unsigned long count = ((mb_objc_msgsend_u64_t)msgsend)(subviews, sel_count);
+    for (unsigned long i = 0; i < count; i++)
+    {
+        mb_id_t child = ((mb_objc_msgsend_u64_arg_ret_t)msgsend)(subviews, sel_object_at_index, i);
+        mb_id_t wk = moonbit_find_wk_webview(child, msgsend);
+        if (wk)
+            return wk;
+    }
+    return NULL;
 }
 #endif
 
@@ -1979,6 +2010,65 @@ MOONBIT_FFI_EXPORT int moonbit_wm_close_window(int window_id)
     return 0;
 #else
     return moonbit_wm_terminate_window(window_id);
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_set_devtools(int window_id, int enabled)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+    if (!enabled)
+        return 0;
+
+#ifdef _WIN32
+    webview_init(
+        w->handle,
+        "(function(){if(window.__LEPUS_DEVTOOLS_READY__)return;"
+        "window.__LEPUS_DEVTOOLS_READY__=true;"
+        "const open=()=>{try{window.chrome&&window.chrome.webview&&window.chrome.webview.openDevTools&&window.chrome.webview.openDevTools();}catch(_){}};"
+        "window.addEventListener('DOMContentLoaded',open,{once:true});"
+        "document.addEventListener('contextmenu',()=>{open();},true);"
+        "open();})();");
+    return 0;
+#elif defined(__APPLE__)
+#if !defined(NDEBUG)
+    void *ns_window = moonbit_window_native_handle(w);
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
+        return -1;
+    mb_sel_t sel_content_view = moonbit_sel_register_name("contentView");
+    if (!sel_content_view)
+        return -1;
+    mb_id_t content_view = ((mb_objc_msgsend_id_ret_t)msgsend)((mb_id_t)ns_window, sel_content_view);
+    if (!content_view)
+        return -1;
+    mb_id_t wk = moonbit_find_wk_webview(content_view, msgsend);
+    if (!wk)
+        return -1;
+
+    mb_sel_t sel_set_inspectable = moonbit_sel_register_name("setInspectable:");
+    if (sel_set_inspectable)
+        ((mb_objc_msgsend_int_arg_t)msgsend)(wk, sel_set_inspectable, 1);
+
+    mb_sel_t sel_inspector = moonbit_sel_register_name("_inspector");
+    mb_sel_t sel_show = moonbit_sel_register_name("show");
+    if (sel_inspector && sel_show)
+    {
+        mb_id_t inspector = ((mb_objc_msgsend_id_ret_t)msgsend)(wk, sel_inspector);
+        if (inspector)
+            ((mb_objc_msgsend_u64_t)msgsend)(inspector, sel_show);
+    }
+    return 0;
+#else
+    (void)enabled;
+    return 0;
+#endif
+#else
+    (void)enabled;
+    return 0;
 #endif
 }
 

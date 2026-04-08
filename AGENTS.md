@@ -126,8 +126,8 @@ moon generate-interface
 
 ```
 JavaScript (browser page)
-        │  window.MoonBitPlugins[plugin][api](payload)
-        │  window.MoonBitBridge.send(name, payload)
+        │  window.lepusApi[plugin][api](payload)
+        │  window.lepusBridge.send(name, payload)
         ▼
   CommandBridge  (command.mbt)
         │  webview.bind() / webview.init() / webview.eval()
@@ -166,7 +166,7 @@ Higher-level registry on top of `CommandBridge`.
 - **`Plugin`**: value object holding `name`, `register`, `on_install`,
   `on_destroy` callbacks.
 - **`PluginHost`**: owns a `CommandBridge` and a map of installed plugins.
-  Injects `window.MoonBitPlugins` JavaScript runtime.
+  Injects `window.lepusApi` JavaScript runtime.
 - **`PluginContext`**: handed to `register` so a plugin can call
   `context.command(api_name, handler)` and `context.emit(event_name, payload)`.
 
@@ -247,11 +247,11 @@ The stub includes `moonbit.h` for `moonbit_decref`, `moonbit_make_bytes_raw`, an
 
 ```js
 // Via CommandBridge
-const response = await window.MoonBitBridge.send(commandName, payload);
+const response = await window.lepusBridge.send(commandName, payload);
 // response: { status: "ok"|"error", payload?: any, error?: string }
 
 // Via PluginHost shorthand
-const response = await window.MoonBitPlugins["pluginName"]["apiName"](payload);
+const response = await window.lepusApi["pluginName"]["apiName"](payload);
 ```
 
 ### MoonBit → JS (Fire-and-Forget)
@@ -263,9 +263,9 @@ webview.emit_plugin("pluginName", "eventName", payload)  // WebView shorthand
 ```
 
 ```js
-window.MoonBitBridge.onCommand(listener);          // raw bridge
-window.MoonBitPlugins["pluginName"]["@@on"](listener);        // plugin-scoped
-window.MoonBitPlugins["pluginName"]["@@onEvent"](name, fn);   // named event
+window.lepusBridge.onCommand(listener);          // raw bridge
+window.lepusApi["pluginName"]["@@on"](listener);        // plugin-scoped
+window.lepusApi["pluginName"]["@@onEvent"](name, fn);   // named event
 ```
 
 ### Command Name Convention for Plugins

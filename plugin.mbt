@@ -145,14 +145,14 @@ pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] Plugi
 /// Creates a plugin host backed by a `CommandBridge`.
 ///
 /// `global_name` controls the JavaScript namespace used for plugin APIs
-/// (defaults to `window.MoonBitPlugins`).
+/// (defaults to `window.lepusApi`).
 pub fn[X] PluginHost::new(
   webview : WebView[X],
-  global_name? : String = "MoonBitPlugins",
+  global_name? : String = "lepusApi",
 ) -> PluginHost[X] {
-  let bridge = CommandBridge::new(webview, global_name="MoonBitBridge")
+  let bridge = CommandBridge::new(webview, global_name="lepusBridge")
   let host = PluginHost::{ webview, bridge, global_name, plugins: {}, apis: {} }
-  host.install_script(make_plugin_host_script(global_name, "MoonBitBridge"))
+  host.install_script(make_plugin_host_script(global_name, "lepusBridge"))
   host
 }
 
@@ -247,7 +247,7 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_sync(
 /// Registers an async typed plugin command.
 ///
 /// The command becomes callable from JavaScript through:
-/// `window.MoonBitPlugins[plugin_name][api_name](payload)`.
+/// `window.lepusApi[plugin_name][api_name](payload)`.
 /// The callback is spawned as a background task, non-blocking.
 pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_async(
   self : PluginContext[X],

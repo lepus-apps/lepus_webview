@@ -321,6 +321,16 @@ pub fn WindowManager::close_window(
 }
 
 ///|
+/// Enable or disable developer tools integration.
+pub fn WindowManager::set_devtools(
+  _self : WindowManager,
+  window_id : Int,
+  enabled : Bool,
+) -> Int {
+  wm_set_devtools(window_id, if enabled { 1 } else { 0 })
+}
+
+///|
 /// Send an IPC message.
 pub fn WindowManager::send_message(
   _self : WindowManager,

@@ -13,7 +13,7 @@
 ```mermaid
 flowchart LR
     subgraph JS["JavaScript Runtime"]
-        JSAPI["window.MoonBitBridge / window.MoonBitPlugins"]
+        JSAPI["window.lepusBridge / window.lepusApi"]
     end
 
     subgraph MB["MoonBit Runtime"]
