@@ -42,11 +42,7 @@ pub fn wm_init(Int) -> Int
 
 pub fn wm_init_js(Int, Bytes) -> Int
 
-pub fn wm_ipc_get_message(Int) -> (Int, Bytes, Bytes)
-
 pub fn wm_ipc_pop_message(Int) -> IpcMessageHandle
-
-pub fn wm_ipc_recv(Int) -> Int
 
 pub fn wm_ipc_request_bytes(Int, Int, Bytes, Bytes, Int) -> Bytes
 

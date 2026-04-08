@@ -23,7 +23,6 @@ typedef CONDITION_VARIABLE pthread_cond_t;
 #define PTHREAD_COND_INITIALIZER CONDITION_VARIABLE_INIT
 #define IPC_INVALID_SOCKET INVALID_SOCKET
 #define UNUSED_ATTR
-#define THREAD_LOCAL __declspec(thread)
 #define CLOCK_REALTIME 0
 
 typedef struct
@@ -247,8 +246,6 @@ typedef int socket_handle_t;
 
 #define IPC_INVALID_SOCKET (-1)
 #define UNUSED_ATTR __attribute__((unused))
-#define THREAD_LOCAL __thread
-
 static int socket_last_error(void)
 {
     return errno;
@@ -548,7 +545,7 @@ static void clear_remote_window_fd(int window_id)
 }
 
 /* 前向声明：供较早的辅助函数使用。 */
-MOONBIT_FFI_EXPORT int moonbit_wm_dispatch(
+static int wm_dispatch(
     int window_id,
     void (*fn)(webview_t, void *),
     void *arg);
@@ -1504,7 +1501,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_eval_js(int window_id, const char *js)
             return -1;
         }
 
-        if (moonbit_wm_dispatch(window_id, eval_js_trampoline, ctx) != 0)
+        if (wm_dispatch(window_id, eval_js_trampoline, ctx) != 0)
         {
             free(ctx->js);
             free(ctx);
@@ -1561,7 +1558,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_return_raw(
         return -1;
     }
 
-    if (moonbit_wm_dispatch(window_id, return_raw_trampoline, ctx) != 0)
+    if (wm_dispatch(window_id, return_raw_trampoline, ctx) != 0)
     {
         free(ctx->seq);
         free(ctx->result);
@@ -1889,7 +1886,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_connect_child_process(void)
 }
 
 /** 阻塞等待子进程结束；status 接收退出状态（可为 NULL）。 */
-MOONBIT_FFI_EXPORT int moonbit_wm_wait_child(int pid, int *status)
+static int moonbit_wm_wait_child(int pid, int *status)
 {
 #ifdef _WIN32
     HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
@@ -1917,7 +1914,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_wait_child(int pid, int *status)
 }
 
 /** 非阻塞检查子进程；尚未结束返回 0，已结束返回 PID，错误返回 -1。 */
-MOONBIT_FFI_EXPORT int moonbit_wm_wait_child_noblock(int pid, int *status)
+static int moonbit_wm_wait_child_noblock(int pid, int *status)
 {
 #ifdef _WIN32
     HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
@@ -2289,42 +2286,6 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_respond(
     return rc;
 }
 
-/**
- * 设置全局 IPC 消息回调（message 在回调返回后被释放，不得保留指针）。
- * callback 为 NULL 表示清除。
- */
-MOONBIT_FFI_EXPORT void moonbit_wm_set_ipc_callback(
-    void (*callback)(ipc_message_t *))
-{
-    g_wm.on_ipc_message = callback;
-}
-
-/**
- * 设置窗口创建/销毁全局回调。
- */
-MOONBIT_FFI_EXPORT void moonbit_wm_set_window_callbacks(
-    void (*on_created)(webview_window_t *),
-    void (*on_destroyed)(int32_t))
-{
-    g_wm.on_window_created = on_created;
-    g_wm.on_window_destroyed = on_destroyed;
-}
-
-/**
- * 设置窗口事件回调（仅对指定 window_id 有效）。
- */
-MOONBIT_FFI_EXPORT int moonbit_wm_set_window_event_callback(
-    int window_id,
-    void (*on_event)(webview_window_t *, window_evt_t, void *))
-{
-    pthread_mutex_lock(&g_wm.mutex);
-    webview_window_t *w = find_window(window_id);
-    if (w)
-        w->on_event = on_event;
-    pthread_mutex_unlock(&g_wm.mutex);
-    return w ? 0 : -1;
-}
-
 /* ════════════════════════════════════════════════════════════════
    MoonBit FFI 导出 —— 窗口管理器查询
    ════════════════════════════════════════════════════════════════ */
@@ -2460,54 +2421,6 @@ MOONBIT_FFI_EXPORT int moonbit_run_in_background_thread(
     return 0;
 }
 
-/**
- * 返回 webview_t 的整数标识（用作全局 PluginHost 注册表的键）。
- */
-MOONBIT_FFI_EXPORT int64_t moonbit_webview_identity(webview_t w)
-{
-    return (int64_t)(intptr_t)w;
-}
-
-/* ════════════════════════════════════════════════════════════════
-   窗口管理器感知的 webview 生命周期包装
-   （供 webview.mbt 的 WebView::new / WebView::destroy 使用）
-   ════════════════════════════════════════════════════════════════ */
-
-/**
- * 创建 webview 实例并同时在窗口管理器中注册。
- * 返回 webview_t 句柄（作为 Int64 返回给 MoonBit）。
- */
-MOONBIT_FFI_EXPORT int64_t moonbit_webview_create_managed(
-    int debug,
-    const char *title,
-    int width,
-    int height)
-{
-    if (!g_wm.initialized)
-        moonbit_wm_init(1);
-
-    int wid = moonbit_wm_create_window(title, NULL, width, height,
-                                       0, 0, 0, debug, -1);
-    if (wid < 0)
-        return 0LL;
-
-    pthread_mutex_lock(&g_wm.mutex);
-    webview_window_t *w = find_window(wid);
-    int64_t handle = w ? (int64_t)w->handle : 0LL;
-    pthread_mutex_unlock(&g_wm.mutex);
-    return handle;
-}
-
-/**
- * 销毁 webview 实例并同时从窗口管理器移除。
- * window_id 为 moonbit_wm_create_window 返回值；
- * 若不使用托管创建，则直接调用 webview_destroy(handle)。
- */
-MOONBIT_FFI_EXPORT void moonbit_webview_destroy_managed(int window_id)
-{
-    moonbit_wm_destroy_window(window_id);
-}
-
 /* ════════════════════════════════════════════════════════════════
    辅助：窗口 dispatch（跨线程安全调用 webview API）
    ════════════════════════════════════════════════════════════════ */
@@ -2528,7 +2441,7 @@ static void dispatch_trampoline(webview_t w, void *arg)
 /**
  * 线程安全地向指定窗口的事件循环分派任务。
  */
-MOONBIT_FFI_EXPORT int moonbit_wm_dispatch(
+static int wm_dispatch(
     int window_id,
     void (*fn)(webview_t, void *),
     void *arg)
@@ -2547,42 +2460,6 @@ MOONBIT_FFI_EXPORT int moonbit_wm_dispatch(
     ctx->arg = arg;
     webview_dispatch(handle, dispatch_trampoline, ctx);
     return 0;
-}
-
-/* ─── IPC 消息发送（binding.mbt 接口） ─────────────────────────── */
-
-/**
- * 向指定窗口发送带类型的 IPC 消息。
- * message_type / message_data 为 MoonBit Bytes（以 null 终止的 UTF-8）。
- */
-MOONBIT_FFI_EXPORT int moonbit_webview_send_message(
-    int source_window_id,
-    int target_window_id,
-    const char *message_type,
-    const char *message_data)
-{
-    return moonbit_wm_ipc_send(
-        source_window_id,
-        target_window_id,
-        IPC_MSG_DATA,
-        message_type,
-        message_data);
-}
-
-/**
- * 向所有其他窗口广播消息（target_window_id = 0）。
- */
-MOONBIT_FFI_EXPORT int moonbit_webview_broadcast_message(
-    int source_window_id,
-    const char *message_type,
-    const char *message_data)
-{
-    return moonbit_wm_ipc_send(
-        source_window_id,
-        0, /* 0 = 广播 */
-        IPC_MSG_DATA,
-        message_type,
-        message_data);
 }
 
 /* ─── IPC 消息接收（供 MoonBit 轮询） ─────────────────────────────── */
@@ -2682,22 +2559,6 @@ static void ipc_recv_callback(ipc_message_t *msg)
     pthread_mutex_unlock(&q->mutex);
 }
 
-/**
- * 非阻塞检查是否有 IPC 消息等待指定窗口。
- * 返回消息字节数（>0），无可用消息返回 0。
- */
-MOONBIT_FFI_EXPORT int moonbit_wm_ipc_recv(int window_id)
-{
-    ensure_recv_queues();
-    ipc_recv_queue_t *q = get_recv_queue(window_id);
-    if (!q)
-        return 0;
-    pthread_mutex_lock(&q->mutex);
-    int result = (q->head && q->head->msg.data) ? (int)q->head->msg.data_length : (q->head ? 1 : 0);
-    pthread_mutex_unlock(&q->mutex);
-    return result;
-}
-
 MOONBIT_FFI_EXPORT void *moonbit_wm_ipc_pop_message(int window_id)
 {
     ensure_recv_queues();
@@ -2776,50 +2637,6 @@ MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_message_data(void *message)
     moonbit_bytes_t result = moonbit_make_bytes_raw(len);
     if (len > 0)
         memcpy(result, msg->data, (size_t)len);
-    return result;
-}
-
-/**
- * 获取最后一条 IPC 消息。
- * 返回 (message_type, subtype, data) 元组。
- * 调用前应先用 moonbit_wm_ipc_recv 确认有消息。
- */
-MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_get_message(
-    int window_id)
-{
-    /* 返回编码为 moonbit_bytes_t：message_type|subtype|null|data */
-    /* 这是一个简化实现，返回格式化的字符串 */
-    static THREAD_LOCAL char static_buf[8192];
-    static_buf[0] = '\0';
-
-    ipc_recv_queue_t *q = get_recv_queue(window_id);
-    if (!q)
-        return moonbit_make_bytes_raw(0);
-
-    pthread_mutex_lock(&q->mutex);
-    if (!q->head)
-    {
-        pthread_mutex_unlock(&q->mutex);
-        return moonbit_make_bytes_raw(0);
-    }
-    ipc_recv_node_t *node = q->head;
-    q->head = node->next;
-    if (!q->head)
-        q->tail = NULL;
-    pthread_mutex_unlock(&q->mutex);
-
-    /* 构建返回数据 */
-    snprintf(static_buf, sizeof(static_buf),
-             "%d|%s|%s",
-             (int)node->msg.message_type,
-             node->msg.subtype,
-             node->msg.data ? node->msg.data : "");
-
-    size_t len = strlen(static_buf);
-    moonbit_bytes_t result = moonbit_make_bytes_raw((int32_t)len);
-    memcpy(result, static_buf, len);
-    ipc_message_free(&node->msg);
-    free(node);
     return result;
 }
 
