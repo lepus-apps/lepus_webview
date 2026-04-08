@@ -109,37 +109,39 @@ pub(all) enum IpcMessageType {
 } derive(Eq)
 pub fn IpcMessageType::int(Self) -> Int
 
-pub struct ManagedPluginBuilder {
-  plugin_name : String
-  parent_installers : Array[(ProcessPluginRouter) -> Unit]
-  child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
-}
-pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] ManagedPluginBuilder::command(Self, String, (Payload) -> Reply) -> Unit
-pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] ManagedPluginBuilder::command_async(Self, String, async (Payload) -> Reply) -> Unit
-pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] ManagedPluginBuilder::command_result_async(Self, String, async (Payload) -> Reply) -> Unit
-
 pub struct Plugin {
   name : String
   parent_installers : Array[(ProcessPluginRouter) -> Unit]
   child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
+  direct_installers : Array[(PluginContext[Unit]) -> Unit]
 }
-pub fn Plugin::new(String, (ManagedPluginBuilder) -> Unit) -> Self
+pub fn Plugin::new(String, (PluginBuilder) -> Unit) -> Self
+
+pub struct PluginBuilder {
+  plugin_name : String
+  parent_installers : Array[(ProcessPluginRouter) -> Unit]
+  child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
+  direct_installers : Array[(PluginContext[Unit]) -> Unit]
+}
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command(Self, String, (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command_async(Self, String, async (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command_result_async(Self, String, async (Payload) -> Reply) -> Unit
 
 type PluginContext[X]
 pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_async(Self[X], String, async (Payload) -> Reply) -> Unit
 pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result_async(Self[X], String, async (Payload) -> Reply) -> Unit
 pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result_bg(Self[X], String, (Payload) -> Reply raise) -> Unit
+pub fn[X] PluginContext::install_command_api(Self[X], String, (String) -> Unit) -> Unit
 pub fn[X] PluginContext::name(Self[X]) -> String
+pub fn[X] PluginContext::register_api(Self[X], String) -> String
 
 type PluginHost[X]
 pub fn[X] PluginHost::command_bridge(Self[X]) -> CommandBridge[X]
 pub fn[X] PluginHost::destroy(Self[X]) -> Unit
 pub fn[X] PluginHost::global_name(Self[X]) -> String
-pub fn[X] PluginHost::install(Self[X], PluginInternal[X]) -> Unit
+pub fn PluginHost::install(Self[Unit], Plugin, proxy? : ProcessCommandProxy?) -> Unit
+pub fn[X] PluginHost::install_script(Self[X], String) -> Unit
 pub fn[X] PluginHost::new(WebView[X], global_name? : String) -> Self[X]
-
-type PluginInternal[X]
-pub fn[X] PluginInternal::new(String, (PluginContext[X]) -> Unit, on_install? : (PluginContext[X]) -> Unit) -> Self[X]
 
 pub struct ProcessCommandProxy {
   wm : WindowManager
@@ -224,21 +226,18 @@ pub struct Window {
   title : String
   width : Int
   height : Int
+  size_hint : SizeHint
   debug : Int
   child_arg : String
   mut url : String
   mut html : String
-  startup_history_ops : Array[String]
+  mut runtime_window_id : Int
   plugins : Array[Plugin]
 }
-pub fn Window::back(Self) -> Unit
-pub fn Window::forward(Self) -> Unit
-pub fn Window::go(Self, Int) -> Unit
+pub fn Window::eval(Self, String) -> Unit
 pub fn Window::install(Self, Plugin) -> Unit
 pub fn Window::navigate(Self, String) -> Unit
-pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, debug? : Int, child_arg? : String) -> Self
-pub fn Window::reload(Self) -> Unit
-pub fn Window::reload_force(Self) -> Unit
+pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String) -> Self
 pub fn Window::run(Self) -> Unit
 pub fn Window::set_html(Self, String) -> Unit
 

@@ -16,12 +16,6 @@ async fn sum_async_handler(payload : SumPayload) -> SumReply {
 }
 
 ///|
-async test {
-  let payload = SumPayload::{ left: 2, right: 3 }
-  json_inspect(sum_async_handler(payload), content={ "total": 5 })
-}
-
-///|
 fn main {
   let window = @webview.Window::new(title="title", width=800, height=600)
   window.install(
@@ -44,6 +38,8 @@ fn main {
       })
     }),
   )
+  // window.navigate("https://www.example.com")
+
   window.set_html(
     (
       #|<p>Hello Lepus</p>
@@ -67,4 +63,10 @@ fn main {
     ),
   )
   window.run()
+}
+
+///|
+async test {
+  let payload = SumPayload::{ left: 2, right: 3 }
+  json_inspect(sum_async_handler(payload), content={ "total": 5 })
 }

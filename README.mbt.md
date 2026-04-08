@@ -84,7 +84,8 @@ moon run --target native example
 
 Minimal managed-window example:
 
-```moonbit
+```moonbit nocheck
+///|
 fn main {
   let win = @webview.Window::new(title="Lepus WebView", width=960, height=640)
   win.set_html("<html><body><h1>Hello from MoonBit</h1></body></html>")
