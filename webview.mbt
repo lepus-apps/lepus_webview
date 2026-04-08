@@ -99,7 +99,7 @@ fn[X] WebView::new_managed(
 ///|
 /// Destroys the webview and closes the window.
 /// Safe to call from a background thread.
-fn[X] WebView::destroy(self : WebView[X]) -> Unit {
+pub fn[X] WebView::destroy(self : WebView[X]) -> Unit {
   ignore(wm_destroy_window(self.window_id))
 }
 
@@ -125,7 +125,7 @@ pub fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
 /// webview.set_html("<html><body><h1>Hello, World!</h1></body></html>")
 /// webview.terminate()
 /// ```
-fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
+pub fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
   ignore(wm_set_html(self.window_id, @encoding/utf8.encode(html)))
 }
 
@@ -141,6 +141,40 @@ fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
 /// ```
 pub fn[X] WebView::navigate(self : WebView[X], url : String) -> Unit {
   ignore(wm_navigate(self.window_id, @encoding/utf8.encode(url)))
+}
+
+///|
+/// Navigates one step back in browser history.
+pub fn[X] WebView::back(self : WebView[X]) -> Unit {
+  self.eval("history.back();")
+}
+
+///|
+/// Navigates one step forward in browser history.
+pub fn[X] WebView::forward(self : WebView[X]) -> Unit {
+  self.eval("history.forward();")
+}
+
+///|
+/// Navigates to a specific entry in browser history.
+///
+/// - `delta < 0`: backward
+/// - `delta > 0`: forward
+/// - `delta = 0`: reload current entry
+pub fn[X] WebView::go(self : WebView[X], delta : Int) -> Unit {
+  self.eval("history.go(\{delta});")
+}
+
+///|
+/// Reloads the current page using standard browser cache policy.
+pub fn[X] WebView::reload(self : WebView[X]) -> Unit {
+  self.eval("window.location.reload();")
+}
+
+///|
+/// Reloads the current page and requests a revalidation from server.
+pub fn[X] WebView::reload_force(self : WebView[X]) -> Unit {
+  self.eval("window.location.reload(true);")
 }
 
 ///|

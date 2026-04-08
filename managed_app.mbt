@@ -20,12 +20,13 @@ pub struct ManagedPluginBuilder {
 /// process lifecycle.
 pub struct Window {
   title : String
-  url : String
   width : Int
   height : Int
   debug : Int
   child_arg : String
+  mut url : String
   mut html : String
+  startup_history_ops : Array[String]
   plugins : Array[Plugin]
 }
 
@@ -114,7 +115,17 @@ pub fn Window::new(
   debug? : Int = 0,
   child_arg? : String = "--moonbit-webview-child",
 ) -> Window {
-  { title, url, width, height, debug, child_arg, html: "", plugins: [] }
+  {
+    title,
+    url,
+    width,
+    height,
+    debug,
+    child_arg,
+    html: "",
+    startup_history_ops: [],
+    plugins: [],
+  }
 }
 
 ///|
@@ -127,6 +138,41 @@ pub fn Window::install(self : Window, plugin : Plugin) -> Unit {
 /// Sets inline HTML content for the child webview.
 pub fn Window::set_html(self : Window, html : String) -> Unit {
   self.html = html
+}
+
+///|
+pub fn Window::navigate(self : Window, url : String) -> Unit {
+  self.url = url
+}
+
+///|
+/// Schedules one browser-history back navigation to run when child webview starts.
+pub fn Window::back(self : Window) -> Unit {
+  self.startup_history_ops.push("history.back();")
+}
+
+///|
+/// Schedules one browser-history forward navigation to run when child webview starts.
+pub fn Window::forward(self : Window) -> Unit {
+  self.startup_history_ops.push("history.forward();")
+}
+
+///|
+/// Schedules a browser-history jump to run when child webview starts.
+pub fn Window::go(self : Window, delta : Int) -> Unit {
+  self.startup_history_ops.push("history.go(\{delta});")
+}
+
+///|
+/// Schedules a page reload to run when child webview starts.
+pub fn Window::reload(self : Window) -> Unit {
+  self.startup_history_ops.push("window.location.reload();")
+}
+
+///|
+/// Schedules a force reload to run when child webview starts.
+pub fn Window::reload_force(self : Window) -> Unit {
+  self.startup_history_ops.push("window.location.reload(true);")
 }
 
 ///|
@@ -164,6 +210,9 @@ async fn Window::run_child_async(self : Window) -> Unit {
     self.install_child_plugins(webview, wm)
     if self.html != "" {
       webview.set_html(self.html)
+    }
+    for op in self.startup_history_ops {
+      webview.eval(op)
     }
     webview.run()
   })
