@@ -75,7 +75,6 @@ pub fn[X] WebView::new_managed(
   height? : Int = 600,
   debug? : Int = 0,
 ) -> WebView[X] {
-  ignore(wm_init(1))
   let window_id = wm_create_window(
     @encoding/utf8.encode(title),
     @encoding/utf8.encode(url),
@@ -152,6 +151,12 @@ pub fn[X] WebView::navigate(self : WebView[X], url : String) -> Unit {
 /// Returns the raw `WebView_t` handle.
 pub fn[X] WebView::get_handle(self : WebView[X]) -> WebView_t {
   self.handle
+}
+
+///|
+/// Returns the managed window id.
+pub fn[X] WebView::window_id(self : WebView[X]) -> Int {
+  self.window_id
 }
 
 ///|

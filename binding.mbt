@@ -21,6 +21,11 @@ pub type WebView_t
 #external
 pub type BindingHandle
 
+///|
+/// Opaque IPC message snapshot returned by the native queue pop API.
+#external
+pub type IpcMessageHandle
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 ///|
@@ -262,6 +267,23 @@ pub extern "C" fn wm_create_child_window(
 ) -> Int = "moonbit_wm_create_child_window"
 
 ///|
+/// Fork the current process into a child that is already connected to the IPC server.
+/// Returns child pid in the parent process, `0` in the child process, and `-1` on error.
+pub extern "C" fn wm_fork_process() -> Int = "moonbit_wm_fork_process"
+
+///|
+/// Spawn a fresh child process by executing the given program path with one extra argument.
+#borrow(program, arg1)
+pub extern "C" fn wm_spawn_process(
+  program : Bytes,
+  arg1 : Bytes,
+) -> Int = "moonbit_wm_spawn_process"
+
+///|
+/// Connect the current process to the parent's IPC server and switch WM into child mode.
+pub extern "C" fn wm_connect_child_process() -> Int = "moonbit_wm_connect_child_process"
+
+///|
 /// Get process type: 0 main, 1 child.
 pub extern "C" fn wm_get_process_type() -> Int = "moonbit_wm_get_process_type"
 
@@ -272,6 +294,10 @@ pub extern "C" fn wm_get_process_id() -> Int = "moonbit_wm_get_process_id"
 ///|
 /// Kill child process.
 pub extern "C" fn wm_kill_child(pid : Int) -> Int = "moonbit_wm_kill_child"
+
+///|
+/// Non-blocking child wait. Returns child pid when exited, `0` when still running.
+pub extern "C" fn wm_wait_child_noblock(pid : Int) -> Int = "moonbit_wm_wait_child_noblock_no_status"
 
 ///|
 /// Send asynchronous IPC message.
@@ -285,6 +311,27 @@ pub extern "C" fn wm_ipc_send(
 ) -> Int = "moonbit_wm_ipc_send"
 
 ///|
+/// Send an IPC request and wait for the raw response bytes.
+#borrow(subtype, data)
+pub extern "C" fn wm_ipc_request_bytes(
+  source_window_id : Int,
+  target_window_id : Int,
+  subtype : Bytes,
+  data : Bytes,
+  timeout_ms : Int,
+) -> Bytes = "moonbit_wm_ipc_request_bytes"
+
+///|
+/// Send an IPC response that matches a previous request id.
+#borrow(data)
+pub extern "C" fn wm_ipc_respond(
+  source_window_id : Int,
+  target_window_id : Int,
+  request_id : Int,
+  data : Bytes,
+) -> Int = "moonbit_wm_ipc_respond"
+
+///|
 /// Receive an IPC message (non-blocking).
 /// Returns the number of bytes in the received message, or 0 if no message.
 /// The message is stored in a static buffer; copy it before calling again.
@@ -296,3 +343,31 @@ pub extern "C" fn wm_ipc_recv(window_id : Int) -> Int = "moonbit_wm_ipc_recv"
 pub extern "C" fn wm_ipc_get_message(
   window_id : Int,
 ) -> (Int, Bytes, Bytes) = "moonbit_wm_ipc_get_message"
+
+///|
+/// Pop the next queued IPC message snapshot for the given queue id.
+pub extern "C" fn wm_ipc_pop_message(window_id : Int) -> IpcMessageHandle = "moonbit_wm_ipc_pop_message"
+
+///|
+extern "C" fn ipc_message_is_null(message : IpcMessageHandle) -> Bool = "moonbit_is_null"
+
+///|
+extern "C" fn ipc_message_free(message : IpcMessageHandle) -> Unit = "moonbit_wm_ipc_message_free"
+
+///|
+extern "C" fn ipc_message_source_window_id(message : IpcMessageHandle) -> Int = "moonbit_wm_ipc_message_source_window_id"
+
+///|
+extern "C" fn ipc_message_target_window_id(message : IpcMessageHandle) -> Int = "moonbit_wm_ipc_message_target_window_id"
+
+///|
+extern "C" fn ipc_message_type(message : IpcMessageHandle) -> Int = "moonbit_wm_ipc_message_type"
+
+///|
+extern "C" fn ipc_message_id(message : IpcMessageHandle) -> Int = "moonbit_wm_ipc_message_id"
+
+///|
+extern "C" fn ipc_message_subtype(message : IpcMessageHandle) -> Bytes = "moonbit_wm_ipc_message_subtype"
+
+///|
+extern "C" fn ipc_message_data(message : IpcMessageHandle) -> Bytes = "moonbit_wm_ipc_message_data"

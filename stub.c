@@ -13,6 +13,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <time.h>
+#include <spawn.h>
 
 /* ── webview 前向声明 ─────────────────────────────────────────── */
 typedef void *webview_t;
@@ -33,6 +34,7 @@ extern void webview_return(webview_t w, const char *seq, int status, const char 
 extern void webview_set_html(webview_t w, const char *html);
 extern int64_t webview_get_window(webview_t w);
 extern int64_t webview_get_native_handle(webview_t w, int kind);
+extern char **environ;
 
 /* moonbit 运行时接口 */
 #include "moonbit.h"
@@ -174,6 +176,7 @@ typedef struct
     int32_t pending_msg_id;
     pthread_cond_t response_cond;
     pthread_mutex_t response_mutex;
+    pthread_mutex_t request_mutex;
     /* 全局消息序号 */
     int32_t next_message_id;
 } window_manager_t;
@@ -198,6 +201,7 @@ static window_manager_t g_wm = {
     .pending_msg_id = -1,
     .response_cond = PTHREAD_COND_INITIALIZER,
     .response_mutex = PTHREAD_MUTEX_INITIALIZER,
+    .request_mutex = PTHREAD_MUTEX_INITIALIZER,
     .next_message_id = 1};
 
 /* ── IPC 子进程客户端 ─────────────────────────────────────────── */
@@ -220,11 +224,58 @@ static ipc_client_t g_ipc_client = {
     .message_seq = 0,
     .state = IPC_CONN_DISCONNECTED};
 
+static int *g_remote_window_fds = NULL;
+static int g_remote_window_fds_capacity = 0;
+
+static void ensure_remote_window_fds_capacity_locked(int window_id)
+{
+    if (window_id < 0)
+        return;
+    if (window_id < g_remote_window_fds_capacity)
+        return;
+    int new_cap = g_remote_window_fds_capacity == 0 ? 32 : g_remote_window_fds_capacity * 2;
+    while (new_cap <= window_id)
+        new_cap *= 2;
+    int *new_fds = (int *)realloc(g_remote_window_fds, (size_t)new_cap * sizeof(int));
+    if (!new_fds)
+        return;
+    for (int i = g_remote_window_fds_capacity; i < new_cap; i++)
+        new_fds[i] = -1;
+    g_remote_window_fds = new_fds;
+    g_remote_window_fds_capacity = new_cap;
+}
+
+static void set_remote_window_fd(int window_id, int fd)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    ensure_remote_window_fds_capacity_locked(window_id);
+    if (window_id >= 0 && window_id < g_remote_window_fds_capacity)
+        g_remote_window_fds[window_id] = fd;
+    pthread_mutex_unlock(&g_wm.mutex);
+}
+
+static int get_remote_window_fd(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    int fd = (window_id >= 0 && window_id < g_remote_window_fds_capacity) ? g_remote_window_fds[window_id] : -1;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return fd;
+}
+
+static void clear_remote_window_fd(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    if (window_id >= 0 && window_id < g_remote_window_fds_capacity)
+        g_remote_window_fds[window_id] = -1;
+    pthread_mutex_unlock(&g_wm.mutex);
+}
+
 /* 前向声明：供较早的辅助函数使用。 */
 MOONBIT_FFI_EXPORT int moonbit_wm_dispatch(
     int window_id,
     void (*fn)(webview_t, void *),
     void *arg);
+static void ipc_recv_callback(ipc_message_t *msg);
 
 /* ════════════════════════════════════════════════════════════════
    内部辅助函数
@@ -543,6 +594,8 @@ static void route_message(ipc_message_t *msg)
     pthread_mutex_lock(&g_wm.mutex);
     webview_window_t *target = find_window(msg->target_window_id);
     int target_fd = (target && target->ipc_client_fd >= 0) ? target->ipc_client_fd : -1;
+    if (target_fd < 0 && msg->target_window_id >= 0 && msg->target_window_id < g_remote_window_fds_capacity)
+        target_fd = g_remote_window_fds[msg->target_window_id];
     pthread_mutex_unlock(&g_wm.mutex);
 
     if (target_fd >= 0)
@@ -565,6 +618,9 @@ static void *ipc_conn_handler(void *arg)
         if (ctx->remote_window_id < 0 && msg.source_window_id > 0)
         {
             ctx->remote_window_id = msg.source_window_id;
+            ensure_remote_window_fds_capacity_locked(msg.source_window_id);
+            if (msg.source_window_id < g_remote_window_fds_capacity)
+                g_remote_window_fds[msg.source_window_id] = ctx->client_fd;
             pthread_mutex_lock(&g_wm.mutex);
             webview_window_t *w = find_window(msg.source_window_id);
             if (w)
@@ -612,6 +668,7 @@ static void *ipc_conn_handler(void *arg)
         w->ipc_state = IPC_CONN_DISCONNECTED;
     }
     pthread_mutex_unlock(&g_wm.mutex);
+    clear_remote_window_fd(ctx->remote_window_id);
 
     close(ctx->client_fd);
     free(ctx);
@@ -788,6 +845,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_init(int is_main_process)
     }
 
     g_wm.initialized = 1;
+    g_wm.on_ipc_message = ipc_recv_callback;
     return 0;
 }
 
@@ -1370,6 +1428,108 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_child_window(
     return (int)pid;
 }
 
+MOONBIT_FFI_EXPORT int moonbit_wm_fork_process(void)
+{
+    if (!g_wm.initialized)
+    {
+        if (moonbit_wm_init(1) != 0)
+            return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        perror("[WM] fork");
+        return -1;
+    }
+
+    if (pid == 0)
+    {
+        g_wm.initialized = 0;
+        g_wm.process_type = PROCESS_TYPE_CHILD;
+        g_wm.head = g_wm.tail = NULL;
+        g_wm.window_count = 0;
+        g_wm.next_window_id = 1;
+        g_wm.ipc_server_running = 0;
+        g_wm.on_ipc_message = NULL;
+        g_ipc_client.connected = 0;
+
+        int sock = connect_to_ipc_server();
+        if (sock < 0)
+        {
+            fprintf(stderr, "[WM-child] IPC connect failed\n");
+            exit(1);
+        }
+
+        g_ipc_client.socket_fd = sock;
+        g_ipc_client.connected = 1;
+        g_ipc_client.state = IPC_CONN_CONNECTED;
+
+        if (moonbit_wm_init(0) != 0)
+        {
+            fprintf(stderr, "[WM-child] init failed\n");
+            exit(1);
+        }
+
+        pthread_create(&g_ipc_client.listener_thread, NULL, ipc_client_listener, NULL);
+        return 0;
+    }
+
+    return (int)pid;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_spawn_process(
+    const char *program,
+    const char *arg1)
+{
+    if (!program || !program[0])
+        return -1;
+
+    pid_t pid = 0;
+    char *const argv[] = {
+        (char *)program,
+        (char *)(arg1 && arg1[0] ? arg1 : NULL),
+        NULL};
+
+    int rc = posix_spawn(&pid, program, NULL, NULL, argv, environ);
+    if (rc != 0)
+    {
+        errno = rc;
+        perror("[WM] posix_spawn");
+        return -1;
+    }
+    return (int)pid;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_connect_child_process(void)
+{
+    g_wm.initialized = 0;
+    g_wm.process_type = PROCESS_TYPE_CHILD;
+    g_wm.head = g_wm.tail = NULL;
+    g_wm.window_count = 0;
+    g_wm.next_window_id = 1;
+    g_wm.ipc_server_running = 0;
+    g_wm.on_ipc_message = NULL;
+    g_ipc_client.connected = 0;
+
+    int sock = connect_to_ipc_server();
+    if (sock < 0)
+    {
+        fprintf(stderr, "[WM-child] IPC connect failed\n");
+        return -1;
+    }
+
+    g_ipc_client.socket_fd = sock;
+    g_ipc_client.connected = 1;
+    g_ipc_client.state = IPC_CONN_CONNECTED;
+
+    if (moonbit_wm_init(0) != 0)
+        return -1;
+
+    pthread_create(&g_ipc_client.listener_thread, NULL, ipc_client_listener, NULL);
+    return 0;
+}
+
 /** 阻塞等待子进程结束；status 接收退出状态（可为 NULL）。 */
 MOONBIT_FFI_EXPORT int moonbit_wm_wait_child(int pid, int *status)
 {
@@ -1380,6 +1540,11 @@ MOONBIT_FFI_EXPORT int moonbit_wm_wait_child(int pid, int *status)
 MOONBIT_FFI_EXPORT int moonbit_wm_wait_child_noblock(int pid, int *status)
 {
     return (int)waitpid((pid_t)pid, status, WNOHANG);
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_wait_child_noblock_no_status(int pid)
+{
+    return (int)waitpid((pid_t)pid, NULL, WNOHANG);
 }
 
 /** 向子进程发送 SIGTERM。 */
@@ -1474,6 +1639,8 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_send(
             pthread_mutex_lock(&g_wm.mutex);
             webview_window_t *w = find_window(target_window_id);
             int fd = (w && w->ipc_client_fd >= 0) ? w->ipc_client_fd : -1;
+            if (fd < 0 && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+                fd = g_remote_window_fds[target_window_id];
             pthread_mutex_unlock(&g_wm.mutex);
             rc = (fd >= 0) ? ipc_send(fd, &msg) : -1;
         }
@@ -1499,6 +1666,8 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_request(
     int response_buf_len,
     int timeout_ms)
 {
+    pthread_mutex_lock(&g_wm.request_mutex);
+
     ipc_message_t req;
     memset(&req, 0, sizeof(req));
     req.source_window_id = source_window_id;
@@ -1533,12 +1702,15 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_request(
         pthread_mutex_lock(&g_wm.mutex);
         webview_window_t *w = find_window(target_window_id);
         fd = (w && w->ipc_client_fd >= 0) ? w->ipc_client_fd : -1;
+        if (fd < 0 && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+            fd = g_remote_window_fds[target_window_id];
         pthread_mutex_unlock(&g_wm.mutex);
     }
 
     if (fd < 0)
     {
         free(buf);
+        pthread_mutex_unlock(&g_wm.request_mutex);
         return -1;
     }
 
@@ -1557,6 +1729,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_request(
         g_wm.pending_msg_id = -1;
         pthread_mutex_unlock(&g_wm.response_mutex);
         free(buf);
+        pthread_mutex_unlock(&g_wm.request_mutex);
         return -1;
     }
     free(buf);
@@ -1596,6 +1769,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_request(
     if (wait_rc != 0 || response.message_id != req.message_id)
     {
         ipc_message_free(&response);
+        pthread_mutex_unlock(&g_wm.request_mutex);
         return -1; /* 超时或中断 */
     }
 
@@ -1612,7 +1786,31 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_request(
     }
 
     ipc_message_free(&response);
+    pthread_mutex_unlock(&g_wm.request_mutex);
     return copy_len;
+}
+
+MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_request_bytes(
+    int source_window_id,
+    int target_window_id,
+    const char *subtype,
+    const char *data,
+    int timeout_ms)
+{
+    char response_buf[IPC_MAX_DATA + 1];
+    int len = moonbit_wm_ipc_request(
+        source_window_id,
+        target_window_id,
+        subtype,
+        data,
+        response_buf,
+        sizeof(response_buf),
+        timeout_ms);
+    if (len <= 0)
+        return moonbit_make_bytes_raw(0);
+    moonbit_bytes_t result = moonbit_make_bytes_raw((int32_t)len);
+    memcpy(result, response_buf, (size_t)len);
+    return result;
 }
 
 /**
@@ -1659,6 +1857,8 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_respond(
         pthread_mutex_lock(&g_wm.mutex);
         webview_window_t *w = find_window(target_window_id);
         int fd = (w && w->ipc_client_fd >= 0) ? w->ipc_client_fd : -1;
+        if (fd < 0 && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+            fd = g_remote_window_fds[target_window_id];
         pthread_mutex_unlock(&g_wm.mutex);
         rc = (fd >= 0) ? ipc_send(fd, &msg) : -1;
     }
@@ -1966,13 +2166,16 @@ MOONBIT_FFI_EXPORT int moonbit_webview_broadcast_message(
 /* ─── IPC 消息接收（供 MoonBit 轮询） ─────────────────────────────── */
 
 /* 每个窗口的 IPC 接收队列（单条消息缓冲） */
+typedef struct ipc_recv_node
+{
+    ipc_message_t msg;
+    struct ipc_recv_node *next;
+} ipc_recv_node_t;
+
 typedef struct
 {
-    ipc_msg_type_t message_type;
-    char subtype[IPC_SUBTYPE_LEN];
-    char *data;
-    int32_t data_length;
-    int has_message;
+    ipc_recv_node_t *head;
+    ipc_recv_node_t *tail;
     pthread_mutex_t mutex;
 } ipc_recv_queue_t;
 
@@ -1983,23 +2186,23 @@ static pthread_mutex_t g_recv_queues_mutex = PTHREAD_MUTEX_INITIALIZER;
 static ipc_recv_queue_t *get_recv_queue(int window_id)
 {
     pthread_mutex_lock(&g_recv_queues_mutex);
-    if (window_id <= 0 || window_id > g_recv_queue_capacity || !g_recv_queue)
+    if (window_id < 0 || window_id >= g_recv_queue_capacity || !g_recv_queue)
     {
         pthread_mutex_unlock(&g_recv_queues_mutex);
         return NULL;
     }
     pthread_mutex_unlock(&g_recv_queues_mutex);
-    return &g_recv_queue[window_id - 1];
+    return &g_recv_queue[window_id];
 }
 
 static void ensure_recv_queues(void)
 {
     pthread_mutex_lock(&g_recv_queues_mutex);
-    if (g_recv_queue_capacity < g_wm.next_window_id + 16)
+    if (g_recv_queue_capacity < g_wm.next_window_id + 17)
     {
         int new_cap = g_recv_queue_capacity == 0 ? 32 : g_recv_queue_capacity * 2;
-        if (new_cap < g_wm.next_window_id + 16)
-            new_cap = g_wm.next_window_id + 16;
+        if (new_cap < g_wm.next_window_id + 17)
+            new_cap = g_wm.next_window_id + 17;
         ipc_recv_queue_t *new_q =
             (ipc_recv_queue_t *)realloc(g_recv_queue, new_cap * sizeof(ipc_recv_queue_t));
         if (new_q)
@@ -2019,34 +2222,40 @@ static void ensure_recv_queues(void)
 /* IPC 消息回调：将消息放入窗口的接收队列 */
 static void ipc_recv_callback(ipc_message_t *msg)
 {
-    if (msg->target_window_id <= 0)
+    if (msg->target_window_id < 0)
         return;
     ipc_recv_queue_t *q = get_recv_queue(msg->target_window_id);
     if (!q)
         return;
-    pthread_mutex_lock(&q->mutex);
-    if (!q->has_message)
+    ipc_recv_node_t *node = (ipc_recv_node_t *)calloc(1, sizeof(ipc_recv_node_t));
+    if (!node)
+        return;
+    node->msg.source_window_id = msg->source_window_id;
+    node->msg.target_window_id = msg->target_window_id;
+    node->msg.message_type = msg->message_type;
+    node->msg.message_id = msg->message_id;
+    strncpy(node->msg.subtype, msg->subtype, IPC_SUBTYPE_LEN - 1);
+    if (msg->data && msg->data_length > 0)
     {
-        if (q->data)
-            free(q->data);
-        q->message_type = msg->message_type;
-        strncpy(q->subtype, msg->subtype, IPC_SUBTYPE_LEN - 1);
-        if (msg->data && msg->data_length > 0)
+        node->msg.data = (char *)malloc((size_t)msg->data_length + 1);
+        if (!node->msg.data)
         {
-            q->data = (char *)malloc(msg->data_length + 1);
-            if (q->data)
-            {
-                memcpy(q->data, msg->data, msg->data_length);
-                q->data[msg->data_length] = '\0';
-            }
-            q->data_length = msg->data_length;
+            free(node);
+            return;
         }
-        else
-        {
-            q->data = NULL;
-            q->data_length = 0;
-        }
-        q->has_message = 1;
+        memcpy(node->msg.data, msg->data, (size_t)msg->data_length);
+        node->msg.data[msg->data_length] = '\0';
+        node->msg.data_length = msg->data_length;
+    }
+    pthread_mutex_lock(&q->mutex);
+    if (!q->tail)
+    {
+        q->head = q->tail = node;
+    }
+    else
+    {
+        q->tail->next = node;
+        q->tail = node;
     }
     pthread_mutex_unlock(&q->mutex);
 }
@@ -2062,8 +2271,89 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_recv(int window_id)
     if (!q)
         return 0;
     pthread_mutex_lock(&q->mutex);
-    int result = q->has_message ? (int)q->data_length : 0;
+    int result = (q->head && q->head->msg.data) ? (int)q->head->msg.data_length : (q->head ? 1 : 0);
     pthread_mutex_unlock(&q->mutex);
+    return result;
+}
+
+MOONBIT_FFI_EXPORT void *moonbit_wm_ipc_pop_message(int window_id)
+{
+    ensure_recv_queues();
+    ipc_recv_queue_t *q = get_recv_queue(window_id);
+    if (!q)
+        return NULL;
+
+    pthread_mutex_lock(&q->mutex);
+    if (!q->head)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return NULL;
+    }
+    ipc_recv_node_t *node = q->head;
+    q->head = node->next;
+    if (!q->head)
+        q->tail = NULL;
+    pthread_mutex_unlock(&q->mutex);
+
+    ipc_message_t *msg = (ipc_message_t *)calloc(1, sizeof(ipc_message_t));
+    if (!msg)
+    {
+        ipc_message_free(&node->msg);
+        free(node);
+        return NULL;
+    }
+    *msg = node->msg;
+    free(node);
+    return msg;
+}
+
+MOONBIT_FFI_EXPORT void moonbit_wm_ipc_message_free(void *message)
+{
+    if (!message)
+        return;
+    ipc_message_t *msg = (ipc_message_t *)message;
+    ipc_message_free(msg);
+    free(msg);
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_message_source_window_id(void *message)
+{
+    return message ? ((ipc_message_t *)message)->source_window_id : 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_message_target_window_id(void *message)
+{
+    return message ? ((ipc_message_t *)message)->target_window_id : 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_message_type(void *message)
+{
+    return message ? (int)((ipc_message_t *)message)->message_type : 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_message_id(void *message)
+{
+    return message ? ((ipc_message_t *)message)->message_id : 0;
+}
+
+MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_message_subtype(void *message)
+{
+    ipc_message_t *msg = (ipc_message_t *)message;
+    const char *subtype = msg ? msg->subtype : "";
+    size_t len = strlen(subtype);
+    moonbit_bytes_t result = moonbit_make_bytes_raw((int32_t)len);
+    if (len > 0)
+        memcpy(result, subtype, len);
+    return result;
+}
+
+MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_message_data(void *message)
+{
+    ipc_message_t *msg = (ipc_message_t *)message;
+    int32_t len = (msg && msg->data) ? msg->data_length : 0;
+    moonbit_bytes_t result = moonbit_make_bytes_raw(len);
+    if (len > 0)
+        memcpy(result, msg->data, (size_t)len);
     return result;
 }
 
@@ -2085,31 +2375,29 @@ MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_get_message(
         return moonbit_make_bytes_raw(0);
 
     pthread_mutex_lock(&q->mutex);
-    if (!q->has_message)
+    if (!q->head)
     {
         pthread_mutex_unlock(&q->mutex);
         return moonbit_make_bytes_raw(0);
     }
+    ipc_recv_node_t *node = q->head;
+    q->head = node->next;
+    if (!q->head)
+        q->tail = NULL;
+    pthread_mutex_unlock(&q->mutex);
 
     /* 构建返回数据 */
     snprintf(static_buf, sizeof(static_buf),
              "%d|%s|%s",
-             (int)q->message_type,
-             q->subtype ? q->subtype : "",
-             q->data ? q->data : "");
-
-    q->has_message = 0;
-    if (q->data)
-    {
-        free(q->data);
-        q->data = NULL;
-    }
-    q->data_length = 0;
-    pthread_mutex_unlock(&q->mutex);
+             (int)node->msg.message_type,
+             node->msg.subtype,
+             node->msg.data ? node->msg.data : "");
 
     size_t len = strlen(static_buf);
     moonbit_bytes_t result = moonbit_make_bytes_raw((int32_t)len);
     memcpy(result, static_buf, len);
+    ipc_message_free(&node->msg);
+    free(node);
     return result;
 }
 

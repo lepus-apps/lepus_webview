@@ -58,6 +58,17 @@ pub struct WindowManager {
 }
 
 ///|
+/// Snapshot of one IPC message copied out of the native queue.
+pub struct IpcMessage {
+  source_window_id : Int
+  target_window_id : Int
+  message_type : IpcMessageType
+  message_id : Int
+  subtype : String
+  data : String
+}
+
+///|
 /// Initialize WM runtime for current process.
 ///
 /// - main process: pass `true`
@@ -125,6 +136,28 @@ pub fn WindowManager::create_child_window(
 }
 
 ///|
+/// Fork the current process. The parent receives the child pid, the child receives `0`.
+pub fn WindowManager::fork_process(_self : WindowManager) -> Int {
+  wm_fork_process()
+}
+
+///|
+/// Spawn a fresh child process by exec-ing the given program path with one extra argument.
+pub fn WindowManager::spawn_process(
+  _self : WindowManager,
+  program : String,
+  arg1 : String,
+) -> Int {
+  wm_spawn_process(@encoding/utf8.encode(program), @encoding/utf8.encode(arg1))
+}
+
+///|
+/// Connect current process to the main-process IPC server and switch into child mode.
+pub fn WindowManager::connect_child_process() -> Int {
+  wm_connect_child_process()
+}
+
+///|
 /// Return true when running in main process.
 pub fn WindowManager::is_main_process(self : WindowManager) -> Bool {
   self.process_type == ProcessType::Main
@@ -179,4 +212,90 @@ pub fn WindowManager::broadcast(
   data : String,
 ) -> Int {
   self.send_message(source_window_id, 0, IpcMessageType::Event, subtype, data)
+}
+
+///|
+/// Send an IPC request and wait for the response body.
+pub fn WindowManager::request(
+  _self : WindowManager,
+  source_window_id : Int,
+  target_window_id : Int,
+  subtype : String,
+  data : String,
+  timeout_ms? : Int = 0,
+) -> String {
+  @encoding/utf8.decode(
+    wm_ipc_request_bytes(
+      source_window_id,
+      target_window_id,
+      @encoding/utf8.encode(subtype),
+      @encoding/utf8.encode(data),
+      timeout_ms,
+    ),
+  ) catch {
+    _ => ""
+  }
+}
+
+///|
+/// Send an IPC response for a previously received request.
+pub fn WindowManager::respond(
+  _self : WindowManager,
+  source_window_id : Int,
+  target_window_id : Int,
+  request_id : Int,
+  data : String,
+) -> Int {
+  wm_ipc_respond(
+    source_window_id,
+    target_window_id,
+    request_id,
+    @encoding/utf8.encode(data),
+  )
+}
+
+///|
+/// Try to pop one queued IPC message for the given queue id.
+pub fn WindowManager::try_pop_message(
+  _self : WindowManager,
+  queue_id : Int,
+) -> IpcMessage? {
+  let handle = wm_ipc_pop_message(queue_id)
+  if ipc_message_is_null(handle) {
+    None
+  } else {
+    let source_window_id = ipc_message_source_window_id(handle)
+    let target_window_id = ipc_message_target_window_id(handle)
+    let message_id = ipc_message_id(handle)
+    let message_type = match ipc_message_type(handle) {
+      0 => IpcMessageType::Data
+      1 => IpcMessageType::Command
+      2 => IpcMessageType::Event
+      3 => IpcMessageType::Request
+      4 => IpcMessageType::Response
+      _ => IpcMessageType::Data
+    }
+    let subtype = @encoding/utf8.decode(ipc_message_subtype(handle)) catch {
+      _ => ""
+    }
+    let data = @encoding/utf8.decode(ipc_message_data(handle)) catch { _ => "" }
+    ipc_message_free(handle)
+    Some(IpcMessage::{
+      source_window_id,
+      target_window_id,
+      message_type,
+      message_id,
+      subtype,
+      data,
+    })
+  }
+}
+
+///|
+/// Non-blocking child process status check.
+pub fn WindowManager::wait_child_noblock(
+  _self : WindowManager,
+  pid : Int,
+) -> Int {
+  wm_wait_child_noblock(pid)
 }

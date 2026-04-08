@@ -74,17 +74,8 @@ pub fn[X] PluginHost::new(
   webview : WebView[X],
   global_name? : String = "MoonBitPlugins",
 ) -> PluginHost[X] {
-  let bridge = CommandBridge::new(
-    webview,
-    global_name="MoonBitBridge",
-  )
-  let host = PluginHost::{
-    webview,
-    bridge,
-    global_name,
-    plugins: {},
-    apis: {},
-  }
+  let bridge = CommandBridge::new(webview, global_name="MoonBitBridge")
+  let host = PluginHost::{ webview, bridge, global_name, plugins: {}, apis: {} }
   host.install_script(make_plugin_host_script(global_name, "MoonBitBridge"))
   host
 }
@@ -148,7 +139,7 @@ pub fn[X, Payload : ToJson] PluginHost::emit(
   self.bridge.send(plugin_event_command_name(), PluginEvent::{
     plugin: plugin_name,
     name: event_name,
-    payload: ToJson::to_json(payload),
+    payload: payload.to_json(),
   })
 }
 
@@ -207,6 +198,19 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_resul
 ) -> Unit {
   self.install_command_api(api_name, command_name => {
     self.host.bridge.handle_result(command_name, callback)
+  })
+}
+
+///|
+/// Registers a typed plugin command that performs blocking work on a detached
+/// native thread and responds asynchronously to JavaScript.
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result_bg(
+  self : PluginContext[X],
+  api_name : String,
+  callback : (Payload) -> Reply raise,
+) -> Unit {
+  self.install_command_api(api_name, command_name => {
+    self.host.bridge.handle_result_bg(command_name, callback)
   })
 }
 

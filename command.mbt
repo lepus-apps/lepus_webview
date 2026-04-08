@@ -21,7 +21,7 @@ pub(all) enum CommandResponse {
 pub fn[Payload : ToJson] CommandResponse::ok(
   payload : Payload,
 ) -> CommandResponse {
-  Ok(ToJson::to_json(payload))
+  Ok(payload.to_json())
 }
 
 ///|
@@ -37,7 +37,7 @@ pub fn CommandResponse::is_ok(self : CommandResponse) -> Bool {
 ///|
 fn CommandResponse::to_wire(self : CommandResponse) -> Bytes {
   match self {
-    Ok(payload) => @encoding/utf8.encode(ToJson::to_json(payload).stringify())
+    Ok(payload) => @encoding/utf8.encode(payload.to_json().stringify())
     Error(msg) => @encoding/utf8.encode("\{msg}")
   }
 }
@@ -104,12 +104,8 @@ fn[X] CommandBridge::start_dispatch(self : CommandBridge[X]) -> Unit {
     fn(raw_id, raw_req) {
       let id = webview_copy_cstr(raw_id)
       let req = webview_copy_cstr(raw_req)
-      let id_str = @encoding/utf8.decode(id) catch {
-        Malformed(_) => ""
-      }
-      let req_str = @encoding/utf8.decode(req) catch {
-        Malformed(_) => ""
-      }
+      let id_str = @encoding/utf8.decode(id) catch { Malformed(_) => "" }
+      let req_str = @encoding/utf8.decode(req) catch { Malformed(_) => "" }
       log(1, "[bridge:recv] id=\{id_str} req=\{req_str}")
       self.dispatch(id_str, req_str)
     },
@@ -128,9 +124,7 @@ fn[X] CommandBridge::dispatch(
     [String(name), payload] => {
       log(1, "[bridge:dispatch] name=\{name}")
       match self.handlers.get(name) {
-        Some(h) => {
-          h(payload, id, self)
-        }
+        Some(h) => h(payload, id, self)
         None => {
           let resp = CommandResponse::error("Unknown command: " + name)
           self.send_response(id, resp)
@@ -146,9 +140,7 @@ fn[X] CommandBridge::dispatch(
 
 ///|
 fn json_parse(data : String) -> Json {
-  let v = @json.parse(data) catch {
-    _ => Json::null()
-  }
+  let v = @json.parse(data) catch { _ => Json::null() }
   v
 }
 
@@ -193,12 +185,10 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_async(
         return
       }
     }
-    self.webview.task_group.spawn_bg(
-      () => {
-        let reply = callback(payload)
-        bridge.send_response(id, CommandResponse::ok(reply))
-      },
-    )
+    self.webview.task_group.spawn_bg(() => {
+      let reply = callback(payload)
+      bridge.send_response(id, CommandResponse::ok(reply))
+    })
   })
 }
 
@@ -241,6 +231,32 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result
 }
 
 ///|
+/// Registers a typed command handler that runs on a detached native thread.
+///
+/// This is useful when the callback performs blocking work that should not hold
+/// the webview UI thread, while still responding asynchronously to JavaScript.
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_bg(
+  self : CommandBridge[X],
+  name : String,
+  callback : (Payload) -> Reply raise,
+) -> Unit {
+  self.handlers.set(name, fn(json, id, bridge) {
+    let payload = @json.from_json(json) catch {
+      msg => {
+        bridge.send_response(id, CommandResponse::error("\{msg}"))
+        return
+      }
+    }
+    ignore(
+      run_in_background_thread(fn(task) { task() }, () => {
+        let reply = try? callback(payload)
+        bridge.send_response(id, CommandResponse::ok(reply))
+      }),
+    )
+  })
+}
+
+///|
 /// Registers an async typed command handler that can raise errors.
 pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_async(
   self : CommandBridge[X],
@@ -254,12 +270,10 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result
         return
       }
     }
-    self.webview.task_group.spawn_bg(
-      () => {
-        let reply = try? callback(payload)
-        bridge.send_response(id, CommandResponse::ok(reply))
-      },
-    )
+    self.webview.task_group.spawn_bg(() => {
+      let reply = try? callback(payload)
+      bridge.send_response(id, CommandResponse::ok(reply))
+    })
   })
 }
 
@@ -274,7 +288,7 @@ pub fn[X, Payload : ToJson] CommandBridge::send(
     self.global_name,
     self.event_name,
     Json::string(name).stringify(),
-    ToJson::to_json(payload).stringify(),
+    payload.to_json().stringify(),
   )
   self.webview.eval(script)
 }
@@ -290,13 +304,13 @@ fn make_bridge_script(
   let g = Json::string(global_name).stringify()
   let b = Json::string(binding_name).stringify()
   let e = Json::string(event_name).stringify()
+  //Readable form:
+  // window[G] = {
+  //   send: (n, p) => window[B](n, p),
+  //   onCommand: listener => { ... event listener ... },
+  //   __dispatch: d => window.dispatchEvent(new CustomEvent(E, {detail:d})),
+  // }
   (
-    //Readable form:
-    // window[G] = {
-    //   send: (n, p) => window[B](n, p),
-    //   onCommand: listener => { ... event listener ... },
-    //   __dispatch: d => window.dispatchEvent(new CustomEvent(E, {detail:d})),
-    // }
     $|!function(){const G=\{g},B=\{b},E=\{e};window[G]={send:(n,p)=>window[B](n,p??null),onCommand:l=>{const h=e=>l(e.detail);window.addEventListener(E,h);return()=>window.removeEventListener(E,h)},__dispatch:d=>window.dispatchEvent(new CustomEvent(E,{detail:d}))};}();
   )
 }
@@ -325,6 +339,7 @@ test "CommandResponse ok encodes as raw JSON payload" {
   assert_true(decoded == "{\"x\":1}")
 }
 
+///|
 test "CommandResponse error encodes as error message string" {
   let r = CommandResponse::error("oops")
   let wire = r.to_wire()
