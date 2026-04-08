@@ -21,8 +21,10 @@ fn main {
     title="title",
     width=800,
     height=600,
-    // frameless=true,
-    // transparent=true,
+    frameless=true,
+    title_bar_style=Hidden,
+    title_bar_overlay=true,
+    debug=1,
   )
   window.install(
     @webview.Plugin::new("math", plugin => {
@@ -48,9 +50,30 @@ fn main {
 
   window.set_html(
     (
-      #|<p>Hello Lepus</p>
-      #|<button id="sum-btn">Sum 2 + 3</button>
-      #|<p id="sum-result">Result: </p>
+      #|<style>
+      #|  body { margin: 0; font-family: sans-serif; background: #f5f6fb; }
+      #|  .titlebar {
+      #|    height: 40px;
+      #|    display: flex;
+      #|    align-items: center;
+      #|    justify-content: space-between;
+      #|    padding: 0 0 0 96px;
+      #|    color: #1f2937;
+      #|    border-bottom: 1px solid #d1d5db;
+      #|    -webkit-app-region: drag;
+      #|    user-select: none;
+      #|  }
+      #|  .content { padding: 16px; }
+      #|</style>
+      #|<div class="titlebar lepus-titlebar">
+      #|  <div>Custom Title Bar</div>
+      #|  <button class="lepus-no-drag" onclick="window.close()">Close</button>
+      #|</div>
+      #|<div class="content">
+      #|  <p>Hello Lepus</p>
+      #|  <button id="sum-btn">Sum 2 + 3</button>
+      #|  <p id="sum-result">Result: </p>
+      #|</div>
       #|<script>
       #|  window.MoonBitPlugins.math.sum({ left: 1, right: 1 });
       #|  window.MoonBitPlugins.math.sum_async({ left: 10, right: 20 });

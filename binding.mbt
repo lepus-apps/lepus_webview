@@ -119,7 +119,17 @@ pub extern "C" fn wm_set_window_customization(
   resizable : Int,
   always_on_top : Int,
   transparent : Int,
+  title_bar_style : TitleBarStyle,
+  title_bar_overlay : Int,
 ) -> Int = "moonbit_wm_set_window_customization"
+
+///|
+/// Set macOS traffic-light buttons position.
+pub extern "C" fn wm_set_traffic_light_position(
+  window_id : Int,
+  x : Int,
+  y : Int,
+) -> Int = "moonbit_wm_set_traffic_light_position"
 
 ///|
 /// Minimize native window.
@@ -147,6 +157,10 @@ pub extern "C" fn wm_set_fullscreen_window(
 ///|
 /// Toggle native fullscreen state.
 pub extern "C" fn wm_toggle_fullscreen_window(window_id : Int) -> Int = "moonbit_wm_toggle_fullscreen_window"
+
+///|
+/// Start native window drag/move gesture.
+pub extern "C" fn wm_start_drag_window(window_id : Int) -> Int = "moonbit_wm_start_drag_window"
 
 ///|
 /// Close native window.

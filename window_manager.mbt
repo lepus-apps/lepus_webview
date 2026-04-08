@@ -39,6 +39,21 @@ pub(all) enum IpcMessageType {
 pub fn IpcMessageType::int(self : IpcMessageType) -> Int = "%identity"
 
 ///|
+pub(all) enum TitleBarStyle {
+  /// Title bar style: default native title bar.
+  Default = 0
+  /// Title bar style: hidden title bar (macOS keeps traffic lights).
+  Hidden = 1
+} derive(Debug, Eq)
+
+///|
+/// macOS traffic-light buttons position (top-left based).
+pub struct TrafficLightPosition {
+  x : Int
+  y : Int
+} derive(Debug, Eq, ToJson, FromJson, Hash)
+
+///|
 /// Thin high-level wrapper over native window manager (stub.c wm_* APIs).
 pub struct WindowManager {
   process_type : ProcessType
@@ -181,6 +196,8 @@ pub fn WindowManager::set_window_customization(
   resizable : Bool,
   always_on_top : Bool,
   transparent : Bool,
+  title_bar_style : TitleBarStyle,
+  title_bar_overlay : Bool,
 ) -> Int {
   wm_set_window_customization(
     window_id,
@@ -204,7 +221,24 @@ pub fn WindowManager::set_window_customization(
     } else {
       0
     },
+    title_bar_style,
+    if title_bar_overlay {
+      1
+    } else {
+      0
+    },
   )
+}
+
+///|
+/// Set macOS traffic-light buttons position.
+pub fn WindowManager::set_traffic_light_position(
+  _self : WindowManager,
+  window_id : Int,
+  x : Int,
+  y : Int,
+) -> Int {
+  wm_set_traffic_light_position(window_id, x, y)
 }
 
 ///|
@@ -260,6 +294,15 @@ pub fn WindowManager::toggle_fullscreen_window(
   window_id : Int,
 ) -> Int {
   wm_toggle_fullscreen_window(window_id)
+}
+
+///|
+/// Start native window drag/move gesture.
+pub fn WindowManager::start_drag_window(
+  _self : WindowManager,
+  window_id : Int,
+) -> Int {
+  wm_start_drag_window(window_id)
 }
 
 ///|

@@ -12,6 +12,9 @@ pub struct Window {
   mut resizable : Bool
   mut always_on_top : Bool
   mut transparent : Bool
+  mut title_bar_style : TitleBarStyle
+  mut title_bar_overlay : Bool
+  mut traffic_light_position : TrafficLightPosition
   mut url : String
   mut html : String
   mut runtime_window_id : Int
@@ -33,6 +36,9 @@ pub fn Window::new(
   resizable? : Bool = true,
   always_on_top? : Bool = false,
   transparent? : Bool = false,
+  title_bar_style? : TitleBarStyle = TitleBarStyle::Default,
+  title_bar_overlay? : Bool = false,
+  traffic_light_position? : TrafficLightPosition = { x: -1, y: -1 },
 ) -> Window {
   {
     title,
@@ -45,6 +51,9 @@ pub fn Window::new(
     resizable,
     always_on_top,
     transparent,
+    title_bar_style,
+    title_bar_overlay,
+    traffic_light_position,
     html: "",
     runtime_window_id: -1,
     plugins: [],
@@ -60,11 +69,15 @@ pub fn Window::set_window_customization(
   resizable : Bool,
   always_on_top : Bool,
   transparent : Bool,
+  title_bar_style : TitleBarStyle,
+  title_bar_overlay : Bool,
 ) -> Unit {
   self.frameless = frameless
   self.resizable = resizable
   self.always_on_top = always_on_top
   self.transparent = transparent
+  self.title_bar_style = title_bar_style
+  self.title_bar_overlay = title_bar_overlay
   if self.runtime_window_id > 0 {
     ignore(
       wm_set_window_customization(
@@ -89,8 +102,27 @@ pub fn Window::set_window_customization(
         } else {
           0
         },
+        title_bar_style,
+        if title_bar_overlay {
+          1
+        } else {
+          0
+        },
       ),
     )
+  }
+}
+
+///|
+/// Set macOS traffic-light buttons position.
+pub fn Window::set_traffic_light_position(
+  self : Window,
+  x : Int,
+  y : Int,
+) -> Unit {
+  self.traffic_light_position = { x, y }
+  if self.runtime_window_id > 0 {
+    ignore(wm_set_traffic_light_position(self.runtime_window_id, x, y))
   }
 }
 
@@ -152,19 +184,102 @@ async fn Window::run_child_async(self : Window) -> Unit {
       resizable=self.resizable,
       always_on_top=self.always_on_top,
       transparent=self.transparent,
+      title_bar_style=self.title_bar_style,
+      title_bar_overlay=self.title_bar_overlay,
+      traffic_light_position=self.traffic_light_position,
     )
     self.runtime_window_id = webview.window_id()
-    if self.frameless {
+    self.install_child_plugins(webview, wm)
+    if self.frameless ||
+      self.title_bar_style == TitleBarStyle::Hidden ||
+      self.title_bar_overlay {
       webview.enable_custom_titlebar_support()
     }
     if self.transparent {
       webview.enable_transparent_background_support()
     }
-    self.install_child_plugins(webview, wm)
+    if self.traffic_light_position.x >= 0 && self.traffic_light_position.y >= 0 {
+      webview.set_traffic_light_position(
+        self.traffic_light_position.x,
+        self.traffic_light_position.y,
+      )
+    }
     if self.html != "" {
       webview.set_html(self.html)
     }
     webview.run()
+  })
+}
+
+///|
+fn Window::window_controls_plugin(_self : Window, window_id : Int) -> Plugin {
+  Plugin::new("window_controls", plugin => {
+    plugin.command_sync("close", (_ : Json) => wm_close_window(window_id) == 0)
+    plugin.command("minimize", (_ : Json) => wm_minimize_window(window_id) == 0)
+    plugin.command("maximize", (_ : Json) => wm_maximize_window(window_id) == 0)
+    plugin.command("unmaximize", (_ : Json) => {
+      wm_unmaximize_window(window_id) == 0
+    })
+    plugin.command("toggle_maximize", (_ : Json) => {
+      wm_toggle_maximize_window(window_id) == 0
+    })
+    plugin.command("set_fullscreen_on", (_ : Json) => {
+      wm_set_fullscreen_window(window_id, 1) == 0
+    })
+    plugin.command("set_fullscreen_off", (_ : Json) => {
+      wm_set_fullscreen_window(window_id, 0) == 0
+    })
+    plugin.command("toggle_fullscreen", (_ : Json) => {
+      wm_toggle_fullscreen_window(window_id) == 0
+    })
+    plugin.command_sync("start_drag", (_ : Json) => {
+      wm_start_drag_window(window_id) == 0
+    })
+    plugin.script(
+      (
+        #|(() => {
+        #|  if (window.__LEPUS_WINDOW_CONTROL_READY__) return;
+        #|  const call = (name) => {
+        #|    const api = window.MoonBitPlugins?.window_controls?.[name];
+        #|    if (typeof api !== 'function') return Promise.resolve(false);
+        #|    return api(null).catch(() => false);
+        #|  };
+        #|  const originalClose = typeof window.close === 'function' ? window.close.bind(window) : null;
+        #|  window.close = () => { call('close'); };
+        #|  window.LepusWindow = {
+        #|    close: () => call('close'),
+        #|    minimize: () => call('minimize'),
+        #|    maximize: () => call('maximize'),
+        #|    unmaximize: () => call('unmaximize'),
+        #|    toggleMaximize: () => call('toggle_maximize'),
+        #|    setFullscreen: (v) => call(v ? 'set_fullscreen_on' : 'set_fullscreen_off'),
+        #|    toggleFullscreen: () => call('toggle_fullscreen'),
+        #|    startDrag: () => call('start_drag'),
+        #|    _originalClose: originalClose,
+        #|  };
+        #|  const hasDragRegion = (el) => {
+        #|    let cur = el;
+        #|    while (cur) {
+        #|      if (cur.matches && cur.matches('.lepus-no-drag,[data-lepus-no-drag=\"true\"]')) return false;
+        #|      if (cur.matches && cur.matches('.lepus-drag,.lepus-titlebar,[data-lepus-drag=\"true\"]')) return true;
+        #|      const css = getComputedStyle(cur).getPropertyValue('-webkit-app-region').trim();
+        #|      if (css === 'no-drag') return false;
+        #|      if (css === 'drag') return true;
+        #|      cur = cur.parentElement;
+        #|    }
+        #|    return false;
+        #|  };
+        #|  document.addEventListener('mousedown', (event) => {
+        #|    if (event.button !== 0) return;
+        #|    const target = event.target;
+        #|    if (!(target instanceof Element)) return;
+        #|    if (!hasDragRegion(target)) return;
+        #|    call('start_drag');
+        #|  }, true);
+        #|  window.__LEPUS_WINDOW_CONTROL_READY__ = true;
+        #|})();
+      ),
+    )
   })
 }
 
@@ -211,6 +326,13 @@ pub fn Window::toggle_fullscreen(self : Window) -> Unit {
 }
 
 ///|
+/// Start native window drag/move gesture.
+pub fn Window::start_drag(self : Window) -> Unit {
+  let window_id = self.require_runtime_window_id()
+  ignore(wm_start_drag_window(window_id))
+}
+
+///|
 /// Close native window.
 pub fn Window::close(self : Window) -> Unit {
   let window_id = self.require_runtime_window_id()
@@ -238,6 +360,7 @@ fn Window::install_child_plugins(
 ) -> Unit {
   let proxy = ProcessCommandProxy::new(wm, webview.window_id())
   let host = PluginHost::new(webview)
+  host.install(self.window_controls_plugin(webview.window_id()))
   for plugin in self.plugins {
     host.install(plugin, proxy=Some(proxy))
   }

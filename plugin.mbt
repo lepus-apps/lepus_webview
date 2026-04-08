@@ -18,6 +18,7 @@
 /// - child process: register proxy handlers or direct handlers
 pub struct Plugin {
   name : String
+  install_scripts : Array[String]
   parent_installers : Array[(ProcessPluginRouter) -> Unit]
   child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
   direct_installers : Array[(PluginContext[Unit]) -> Unit]
@@ -27,6 +28,7 @@ pub struct Plugin {
 /// Registration context used while building a managed `Plugin`.
 pub struct PluginBuilder {
   plugin_name : String
+  install_scripts : Array[String]
   parent_installers : Array[(ProcessPluginRouter) -> Unit]
   child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
   direct_installers : Array[(PluginContext[Unit]) -> Unit]
@@ -59,6 +61,7 @@ struct PluginContext[X] {
 pub fn Plugin::new(name : String, register : (PluginBuilder) -> Unit) -> Plugin {
   let builder = PluginBuilder::{
     plugin_name: name,
+    install_scripts: [],
     parent_installers: [],
     child_installers: [],
     direct_installers: [],
@@ -66,10 +69,17 @@ pub fn Plugin::new(name : String, register : (PluginBuilder) -> Unit) -> Plugin 
   register(builder)
   {
     name,
+    install_scripts: builder.install_scripts,
     parent_installers: builder.parent_installers,
     child_installers: builder.child_installers,
     direct_installers: builder.direct_installers,
   }
+}
+
+///|
+/// Registers a JavaScript snippet injected when this plugin is installed.
+pub fn PluginBuilder::script(self : PluginBuilder, script : String) -> Unit {
+  self.install_scripts.push(script)
 }
 
 ///|
@@ -88,6 +98,24 @@ pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] Plugi
     plugin.command_result_bg(api_name, handler)
   })
   self.direct_installers.push(plugin => plugin.command_async(api_name, callback))
+}
+
+///|
+/// Registers a typed synchronous plugin command.
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command_sync(
+  self : PluginBuilder,
+  api_name : String,
+  callback : (Payload) -> Reply,
+) -> Unit {
+  let plugin_name = self.plugin_name
+  self.parent_installers.push(router => router.command(api_name, callback))
+  self.child_installers.push((plugin, proxy) => {
+    let handler : (Payload) -> Reply raise = proxy.plugin_handler(
+      plugin_name, api_name,
+    )
+    plugin.command_result_bg(api_name, handler)
+  })
+  self.direct_installers.push(plugin => plugin.command_sync(api_name, callback))
 }
 
 ///|
@@ -149,6 +177,9 @@ pub fn PluginHost::install(
   self.install_script(
     make_plugin_namespace_script(self.global_name, plugin.name),
   )
+  for script in plugin.install_scripts {
+    self.install_script(script)
+  }
   match proxy {
     Some(proxy) =>
       for install in plugin.child_installers {
@@ -197,6 +228,18 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_resul
 ) -> Unit {
   self.install_command_api(api_name, command_name => {
     self.host.bridge.handle_result_bg(command_name, callback)
+  })
+}
+
+///|
+/// Registers a typed synchronous plugin command.
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_sync(
+  self : PluginContext[X],
+  api_name : String,
+  callback : (Payload) -> Reply,
+) -> Unit {
+  self.install_command_api(api_name, command_name => {
+    self.host.bridge.handle_sync(command_name, callback)
   })
 }
 
