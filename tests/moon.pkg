@@ -3,14 +3,3 @@ import {
 }
 
 supported_targets = "+native"
-
-options(
-  link: {
-    "native": {
-      // MacOS / Linux
-      "cc-link-flags": "-Llib -lwebview -Wl,-rpath,lib",
-      // Windows
-      // "cc-link-flags": "lib/webview.lib",
-    },
-  },
-)
