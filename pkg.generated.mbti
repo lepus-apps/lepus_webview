@@ -235,7 +235,7 @@ pub(all) enum TitleBarStyle {
   Hidden
 } derive(Eq, @debug.Debug)
 
-pub struct TrafficLightPosition {
+pub(all) struct TrafficLightPosition {
   x : Int
   y : Int
 } derive(Eq, Hash, ToJson, @debug.Debug, @json.FromJson)
@@ -283,6 +283,7 @@ pub struct Window {
   mut title_bar_style : TitleBarStyle
   mut title_bar_overlay : Bool
   mut traffic_light_position : TrafficLightPosition
+  enable_window_controls_plugin : Bool
   mut url : String
   mut html : String
   mut runtime_window_id : Int
@@ -294,7 +295,7 @@ pub fn Window::install(Self, Plugin) -> Unit
 pub fn Window::maximize(Self) -> Unit
 pub fn Window::minimize(Self) -> Unit
 pub fn Window::navigate(Self, String) -> Unit
-pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String, frameless? : Bool, resizable? : Bool, always_on_top? : Bool, transparent? : Bool, title_bar_style? : TitleBarStyle, title_bar_overlay? : Bool, traffic_light_position? : TrafficLightPosition) -> Self
+pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String, frameless? : Bool, resizable? : Bool, always_on_top? : Bool, transparent? : Bool, title_bar_style? : TitleBarStyle, title_bar_overlay? : Bool, traffic_light_position? : TrafficLightPosition, enable_window_controls_plugin? : Bool) -> Self
 pub fn Window::run(Self) -> Unit
 pub fn Window::set_fullscreen(Self, Bool) -> Unit
 pub fn Window::set_html(Self, String) -> Unit

@@ -117,6 +117,7 @@ pub extern "C" fn wm_set_window_customization(
   window_id : Int,
   frameless : Int,
   resizable : Int,
+  closeable : Int,
   always_on_top : Int,
   transparent : Int,
   title_bar_style : TitleBarStyle,
