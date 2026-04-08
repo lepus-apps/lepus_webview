@@ -1255,49 +1255,6 @@ MOONBIT_FFI_EXPORT int moonbit_webview_get_window_visibility(int window_id)
    MoonBit FFI 导出 —— 窗口属性查询（供 binding.mbt 调用）
    ════════════════════════════════════════════════════════════════ */
 
-MOONBIT_FFI_EXPORT int moonbit_webview_set_window_title(int window_id, const char *title)
-{
-    return moonbit_wm_set_title(window_id, title);
-}
-
-MOONBIT_FFI_EXPORT int moonbit_webview_set_window_size(int window_id, int width, int height)
-{
-    return moonbit_wm_set_size(window_id, width, height, 0);
-}
-
-/**
- * 获取窗口大小；将 width/height 写入调用方传入的指针。
- * width_ptr / height_ptr 视作 Int 地址（来自 MoonBit extern 参数）。
- */
-MOONBIT_FFI_EXPORT int moonbit_webview_get_window_size(int window_id, int width_dummy, int height_dummy)
-{
-    /* binding.mbt 签名为 (window_id, width: Int, height: Int) -> Int
-       MoonBit 不传递指针；此处仅返回 width<<16|height 编码，
-       上层 MoonBit 代码可自行解包。 */
-    pthread_mutex_lock(&g_wm.mutex);
-    webview_window_t *w = find_window(window_id);
-    int result = w ? ((w->width & 0xFFFF) << 16) | (w->height & 0xFFFF) : -1;
-    pthread_mutex_unlock(&g_wm.mutex);
-    (void)width_dummy;
-    (void)height_dummy;
-    return result;
-}
-
-/**
- * 获取所有窗口 ID 列表。
- * window_ids 是 MoonBit Int（实际为 Int 指针地址）；max_count 为数组容量。
- * 返回写入数量。
- */
-MOONBIT_FFI_EXPORT int moonbit_webview_get_all_window_ids(int window_ids_ptr, int max_count)
-{
-    /* binding.mbt 无法直接传 C 指针；此处将 IDs 编码为逗号分隔字符串
-       存入全局缓冲，通过返回值（逗号分隔字符串首地址的 int 截断）供上层读取。
-       实际上层建议改用 moonbit_wm_get_window_count + moonbit_wm_get_window_id_at。*/
-    (void)window_ids_ptr;
-    (void)max_count;
-    return g_wm.window_count;
-}
-
 /** 获取当前已注册的窗口数量。 */
 MOONBIT_FFI_EXPORT int moonbit_wm_get_window_count(void)
 {
@@ -1332,11 +1289,6 @@ MOONBIT_FFI_EXPORT int moonbit_wm_get_parent_window_id(int window_id)
     return pid_val;
 }
 
-/** 清理所有窗口（供 binding.mbt 的 webview_cleanup 使用）。 */
-MOONBIT_FFI_EXPORT void moonbit_webview_cleanup(void)
-{
-    moonbit_wm_cleanup();
-}
 
 /* ════════════════════════════════════════════════════════════════
    MoonBit FFI 导出 —— 多进程支持

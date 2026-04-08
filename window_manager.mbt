@@ -10,15 +10,11 @@ pub(all) enum WindowState {
 } derive(Eq)
 
 ///|
-pub fn WindowState::int(self : WindowState) -> Int {
-  match self {
-    Unknown => 0
-    Created => 1
-    Running => 2
-    Hidden => 3
-    Closing => 4
-    Closed => 5
-  }
+pub fn WindowState::int(self : WindowState) -> Int = "%identity"
+
+///|
+test {
+  inspect(WindowState::Created.int(), content="1")
 }
 
 ///|
@@ -40,15 +36,7 @@ pub(all) enum IpcMessageType {
 } derive(Eq)
 
 ///|
-pub fn IpcMessageType::int(self : IpcMessageType) -> Int {
-  match self {
-    Data => 0
-    Command => 1
-    Event => 2
-    Request => 3
-    Response => 4
-  }
-}
+pub fn IpcMessageType::int(self : IpcMessageType) -> Int = "%identity"
 
 ///|
 /// Thin high-level wrapper over native window manager (stub.c wm_* APIs).
