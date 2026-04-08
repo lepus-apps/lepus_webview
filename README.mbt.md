@@ -37,38 +37,31 @@ lepus_webview/
 
 ```mermaid
 flowchart TD
-    UI["JavaScript UI<br/>window.MoonBitPlugins / MoonBitBridge"] --> BR["CommandBridge<br/>command.mbt"]
-    BR --> PL["PluginHost / PluginContext<br/>plugin.mbt"]
-    PL --> WV["WebView API<br/>webview.mbt"]
-    WV --> FFI["FFI extern layer<br/>binding.mbt"]
-    FFI --> STUB["Native runtime + glue<br/>stub.c"]
-    STUB --> LIB["webview C library<br/>WebKit / WebView2"]
+    subgraph Frontend["Frontend Runtime (WebView Page)"]
+        UI["JavaScript UI"]
+        JSAPI["window.MoonBitBridge<br/>window.MoonBitPlugins"]
+        UI --> JSAPI
+    end
 
-    PARENT["Managed Parent<br/>managed_app.mbt"] --> ROUTER["Process Router<br/>process_bridge.mbt"]
-    ROUTER --> PROXY["Child Proxy<br/>process_bridge.mbt"]
-    PROXY --> PL
-```
+    subgraph MoonBit["MoonBit Runtime"]
+        BR["CommandBridge<br/>command.mbt"]
+        PL["PluginHost / PluginContext<br/>plugin.mbt"]
+        WV["WebView API<br/>webview.mbt"]
+        PB["Process Bridge (optional)<br/>process_bridge.mbt + managed_app.mbt"]
+        JSAPI --> BR
+        BR --> PL
+        PL --> WV
+        PB --> PL
+    end
 
-## Command Flow
-
-```mermaid
-sequenceDiagram
-    participant JS as JS Page
-    participant PH as PluginHost
-    participant CB as CommandBridge
-    participant WV as WebView
-    participant C as stub.c
-    participant MB as MoonBit Handler
-
-    JS->>PH: MoonBitPlugins.math.sum(payload)
-    PH->>CB: send(command, payload)
-    CB->>WV: bound callback dispatch
-    WV->>C: FFI trampoline
-    C->>MB: invoke closure
-    MB-->>C: success/error
-    C-->>WV: webview_return(seq, status, result)
-    WV-->>CB: response propagation
-    CB-->>JS: Promise resolve/reject
+    subgraph Native["Native Layer"]
+        FFI["FFI Declarations<br/>binding.mbt"]
+        STUB["Native Stub Runtime<br/>stub.c"]
+        LIB["webview C Library<br/>WebKit / WebView2"]
+        WV --> FFI
+        FFI --> STUB
+        STUB --> LIB
+    end
 ```
 
 ## Core Components
@@ -99,8 +92,8 @@ It wraps the native webview handle and exposes APIs such as `run`, `destroy`,
 
 Used for parent/child process execution models. Current response wire format:
 
-- success: `{"status":"ok","payload":...}`
-- failure: `{"status":"error","error":"..."}`
+- success: `[1, payload]`
+- failure: `[0, error]`
 
 ## JavaScript Protocol
 
@@ -129,22 +122,23 @@ moon check
 # Run tests
 moon test --target native
 
-# Build
-moon build --target native
+# Build runnable demo package
+moon build --target native example
 
 # Run demo
 moon run --target native example
-
-# Regenerate package interface
-moon generate-interface
 ```
+
+> For this repository, `example` is the executable package.  
+> The root package is primarily a library package.
 
 ## Platform Notes
 
 - Native target only (`supported_targets = "+native"`)
 - No WASM target support
 - macOS/Linux use linker flags such as `-Llib -lwebview -Wl,-rpath,lib`
-- Windows uses `webview.dll` + `webview.lib` and `_WIN32` adaptations in `stub.c`
+- Windows uses `webview.dll` + `webview.lib` with `_WIN32` adaptation in `stub.c`
+- `fork`-based APIs are POSIX-only; Windows should use `spawn/connect` flow
 
 ## FFI and Ownership Model
 
