@@ -126,8 +126,27 @@ pub extern "C" fn wm_set_window_customization(
 pub extern "C" fn wm_minimize_window(window_id : Int) -> Int = "moonbit_wm_minimize_window"
 
 ///|
+/// Maximize native window.
+pub extern "C" fn wm_maximize_window(window_id : Int) -> Int = "moonbit_wm_maximize_window"
+
+///|
+/// Restore native window from maximized state.
+pub extern "C" fn wm_unmaximize_window(window_id : Int) -> Int = "moonbit_wm_unmaximize_window"
+
+///|
 /// Toggle native maximize state.
 pub extern "C" fn wm_toggle_maximize_window(window_id : Int) -> Int = "moonbit_wm_toggle_maximize_window"
+
+///|
+/// Set native fullscreen state.
+pub extern "C" fn wm_set_fullscreen_window(
+  window_id : Int,
+  fullscreen : Int,
+) -> Int = "moonbit_wm_set_fullscreen_window"
+
+///|
+/// Toggle native fullscreen state.
+pub extern "C" fn wm_toggle_fullscreen_window(window_id : Int) -> Int = "moonbit_wm_toggle_fullscreen_window"
 
 ///|
 /// Close native window.

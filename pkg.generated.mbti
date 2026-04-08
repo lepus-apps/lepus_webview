@@ -54,6 +54,8 @@ pub fn wm_ipc_send(Int, Int, Int, Bytes, Bytes) -> Int
 
 pub fn wm_kill_child(Int) -> Int
 
+pub fn wm_maximize_window(Int) -> Int
+
 pub fn wm_minimize_window(Int) -> Int
 
 pub fn wm_navigate(Int, Bytes) -> Int
@@ -63,6 +65,8 @@ pub fn wm_return_raw(Int, Bytes, Int, Bytes) -> Int
 pub fn wm_run_window(Int) -> Int
 
 pub fn wm_run_window_async(Int) -> Int
+
+pub fn wm_set_fullscreen_window(Int, Int) -> Int
 
 pub fn wm_set_html(Int, Bytes) -> Int
 
@@ -78,7 +82,11 @@ pub fn wm_spawn_process(Bytes, Bytes) -> Int
 
 pub fn wm_terminate_window(Int) -> Int
 
+pub fn wm_toggle_fullscreen_window(Int) -> Int
+
 pub fn wm_toggle_maximize_window(Int) -> Int
+
+pub fn wm_unmaximize_window(Int) -> Int
 
 pub fn wm_wait_child_noblock(Int) -> Int
 
@@ -221,16 +229,20 @@ pub fn[X] WebView::enable_transparent_background_support(Self[X]) -> Unit
 pub fn[X] WebView::forward(Self[X]) -> Unit
 pub fn[X] WebView::get_handle(Self[X]) -> WebView_t
 pub fn[X] WebView::go(Self[X], Int) -> Unit
+pub fn[X] WebView::maximize(Self[X]) -> Unit
 pub fn[X] WebView::minimize(Self[X]) -> Unit
 pub fn[X] WebView::navigate(Self[X], String) -> Unit
 pub fn[X] WebView::reload(Self[X]) -> Unit
 pub fn[X] WebView::reload_force(Self[X]) -> Unit
+pub fn[X] WebView::set_fullscreen(Self[X], Bool) -> Unit
 pub fn[X] WebView::set_html(Self[X], String) -> Unit
 pub fn[X] WebView::set_size(Self[X], Int, Int, SizeHint) -> Unit
 pub fn[X] WebView::set_title(Self[X], String) -> Unit
 pub fn[X] WebView::set_window_customization(Self[X], Bool, Bool, Bool, Bool) -> Unit
 pub fn[X] WebView::terminate(Self[X]) -> Unit
+pub fn[X] WebView::toggle_fullscreen(Self[X]) -> Unit
 pub fn[X] WebView::toggle_maximize(Self[X]) -> Unit
+pub fn[X] WebView::unmaximize(Self[X]) -> Unit
 
 #external
 pub type WebView_t
@@ -254,13 +266,17 @@ pub struct Window {
 pub fn Window::close(Self) -> Unit
 pub fn Window::eval(Self, String) -> Unit
 pub fn Window::install(Self, Plugin) -> Unit
+pub fn Window::maximize(Self) -> Unit
 pub fn Window::minimize(Self) -> Unit
 pub fn Window::navigate(Self, String) -> Unit
 pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String, frameless? : Bool, resizable? : Bool, always_on_top? : Bool, transparent? : Bool) -> Self
 pub fn Window::run(Self) -> Unit
+pub fn Window::set_fullscreen(Self, Bool) -> Unit
 pub fn Window::set_html(Self, String) -> Unit
 pub fn Window::set_window_customization(Self, Bool, Bool, Bool, Bool) -> Unit
+pub fn Window::toggle_fullscreen(Self) -> Unit
 pub fn Window::toggle_maximize(Self) -> Unit
+pub fn Window::unmaximize(Self) -> Unit
 
 pub struct WindowManager {
   process_type : ProcessType
@@ -277,16 +293,20 @@ pub fn WindowManager::fork_process(Self) -> Int
 pub fn WindowManager::init(is_main? : Bool) -> Self
 pub fn WindowManager::is_child_process(Self) -> Bool
 pub fn WindowManager::is_main_process(Self) -> Bool
+pub fn WindowManager::maximize_window(Self, Int) -> Int
 pub fn WindowManager::minimize_window(Self, Int) -> Int
 pub fn WindowManager::request(Self, Int, Int, String, String, timeout_ms? : Int) -> String
 pub fn WindowManager::respond(Self, Int, Int, Int, String) -> Int
 pub fn WindowManager::run_window(Self, Int) -> Int
 pub fn WindowManager::send_message(Self, Int, Int, IpcMessageType, String, String) -> Int
 pub async fn WindowManager::serve_process_commands(Self, Int, async (ProcessCommandRequest) -> ProcessCommandResponse, subtype? : String) -> Unit
+pub fn WindowManager::set_fullscreen_window(Self, Int, Bool) -> Int
 pub fn WindowManager::set_window_customization(Self, Int, Bool, Bool, Bool, Bool) -> Int
 pub fn WindowManager::spawn_process(Self, String, String) -> Int
+pub fn WindowManager::toggle_fullscreen_window(Self, Int) -> Int
 pub fn WindowManager::toggle_maximize_window(Self, Int) -> Int
 pub fn WindowManager::try_pop_message(Self, Int) -> IpcMessage?
+pub fn WindowManager::unmaximize_window(Self, Int) -> Int
 pub fn WindowManager::wait_child_noblock(Self, Int) -> Int
 
 pub(all) enum WindowState {

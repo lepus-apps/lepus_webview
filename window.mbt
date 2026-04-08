@@ -176,10 +176,38 @@ pub fn Window::minimize(self : Window) -> Unit {
 }
 
 ///|
+/// Maximize native window.
+pub fn Window::maximize(self : Window) -> Unit {
+  let window_id = self.require_runtime_window_id()
+  ignore(wm_maximize_window(window_id))
+}
+
+///|
+/// Restore native window from maximized state.
+pub fn Window::unmaximize(self : Window) -> Unit {
+  let window_id = self.require_runtime_window_id()
+  ignore(wm_unmaximize_window(window_id))
+}
+
+///|
 /// Toggle native maximize state.
 pub fn Window::toggle_maximize(self : Window) -> Unit {
   let window_id = self.require_runtime_window_id()
   ignore(wm_toggle_maximize_window(window_id))
+}
+
+///|
+/// Set native fullscreen state.
+pub fn Window::set_fullscreen(self : Window, fullscreen : Bool) -> Unit {
+  let window_id = self.require_runtime_window_id()
+  ignore(wm_set_fullscreen_window(window_id, if fullscreen { 1 } else { 0 }))
+}
+
+///|
+/// Toggle native fullscreen state.
+pub fn Window::toggle_fullscreen(self : Window) -> Unit {
+  let window_id = self.require_runtime_window_id()
+  ignore(wm_toggle_fullscreen_window(window_id))
 }
 
 ///|

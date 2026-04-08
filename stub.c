@@ -414,6 +414,7 @@ typedef struct webview_window
     int32_t debug_mode;
     char url[1024];
     int32_t visible;
+    int32_t fullscreen;
     int32_t is_child_process;
     int32_t parent_window_id;
     socket_handle_t ipc_client_fd; /* 主进程侧：已接受的客户连接 fd */
@@ -1284,6 +1285,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_window(
     w->parent_window_id = parent_window_id;
     w->is_child_process = (g_wm.process_type == PROCESS_TYPE_CHILD) ? 1 : 0;
     w->visible = 1;
+    w->fullscreen = 0;
     w->ipc_client_fd = IPC_INVALID_SOCKET;
     w->ipc_state = IPC_CONN_DISCONNECTED;
     w->width = width > 0 ? width : 800;
@@ -1692,6 +1694,56 @@ MOONBIT_FFI_EXPORT int moonbit_wm_minimize_window(int window_id)
 #endif
 }
 
+MOONBIT_FFI_EXPORT int moonbit_wm_maximize_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+#ifdef _WIN32
+    HWND hwnd = (HWND)moonbit_window_native_handle(w);
+    if (!hwnd)
+        return -1;
+    ShowWindow(hwnd, SW_MAXIMIZE);
+    return 0;
+#elif defined(__APPLE__)
+    void *ns_window = moonbit_window_native_handle(w);
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
+        return -1;
+    ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("zoom:"), (mb_id_t)ns_window);
+    return 0;
+#else
+    return -1;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_unmaximize_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+#ifdef _WIN32
+    HWND hwnd = (HWND)moonbit_window_native_handle(w);
+    if (!hwnd)
+        return -1;
+    ShowWindow(hwnd, SW_RESTORE);
+    return 0;
+#elif defined(__APPLE__)
+    void *ns_window = moonbit_window_native_handle(w);
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
+        return -1;
+    ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("zoom:"), (mb_id_t)ns_window);
+    return 0;
+#else
+    return -1;
+#endif
+}
+
 MOONBIT_FFI_EXPORT int moonbit_wm_toggle_maximize_window(int window_id)
 {
     pthread_mutex_lock(&g_wm.mutex);
@@ -1715,6 +1767,61 @@ MOONBIT_FFI_EXPORT int moonbit_wm_toggle_maximize_window(int window_id)
 #else
     return -1;
 #endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_set_fullscreen_window(int window_id, int fullscreen)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+#ifdef _WIN32
+    HWND hwnd = (HWND)moonbit_window_native_handle(w);
+    if (!hwnd)
+        return -1;
+    if (fullscreen)
+    {
+        ShowWindow(hwnd, SW_MAXIMIZE);
+        w->fullscreen = 1;
+    }
+    else
+    {
+        ShowWindow(hwnd, SW_RESTORE);
+        w->fullscreen = 0;
+    }
+    return 0;
+#elif defined(__APPLE__)
+    void *ns_window = moonbit_window_native_handle(w);
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
+        return -1;
+    mb_sel_t sel_style_mask = moonbit_sel_register_name("styleMask");
+    mb_sel_t sel_toggle_fullscreen = moonbit_sel_register_name("toggleFullScreen:");
+    if (!sel_style_mask || !sel_toggle_fullscreen)
+        return -1;
+    const unsigned long NSWindowStyleMaskFullScreen = 1UL << 14;
+    unsigned long style = ((mb_objc_msgsend_u64_t)msgsend)((mb_id_t)ns_window, sel_style_mask);
+    int is_fullscreen = (style & NSWindowStyleMaskFullScreen) ? 1 : 0;
+    if ((fullscreen && !is_fullscreen) || (!fullscreen && is_fullscreen))
+        ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, sel_toggle_fullscreen, (mb_id_t)ns_window);
+    w->fullscreen = fullscreen ? 1 : 0;
+    return 0;
+#else
+    (void)fullscreen;
+    return -1;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_toggle_fullscreen_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w)
+        return -1;
+    int next = w->fullscreen ? 0 : 1;
+    return moonbit_wm_set_fullscreen_window(window_id, next);
 }
 
 MOONBIT_FFI_EXPORT int moonbit_wm_close_window(int window_id)
