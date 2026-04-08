@@ -1,159 +1,104 @@
 # Lepus WebView
 
-`lepus-apps/webview` is a MoonBit-native desktop framework built on top of the
-[`webview`](https://github.com/webview/webview) C library. It provides a typed,
-plugin-oriented bridge between MoonBit logic and embedded web UI, plus optional
-multi-process routing for parent/child window architectures.
+`lepus-apps/webview` is a MoonBit-native desktop framework built on top of
+[`webview`](https://github.com/webview/webview). It provides:
 
-## Highlights
-
-- Native desktop windows backed by WebKit (macOS/Linux) or WebView2 (Windows)
-- Typed JS <-> MoonBit command bridge
-- Plugin runtime with namespaced command registration
-- Event push channel from MoonBit to JavaScript
-- Parent/child process command routing and IPC abstractions
-- Native FFI layer with explicit ownership annotations
-
-## Repository Layout
-
-```text
-lepus_webview/
-├── binding.mbt          # Low-level extern declarations (MoonBit <-> C)
-├── command.mbt          # Command bridge protocol and dispatch
-├── plugin.mbt           # PluginHost / PluginContext APIs
-├── process_bridge.mbt   # Process command request/response wire protocol
-├── managed_app.mbt      # Parent-child process orchestration
-├── webview.mbt          # Public WebView API
-├── window_manager.mbt   # Window manager and IPC wrappers
-├── stub.c               # Native stub runtime and platform adaptation
-├── moon.mod.json        # Module metadata
-├── moon.pkg             # Build targets, native stub, link options
-├── lib/                 # Prebuilt shared libraries
-├── example/             # Runnable demo app
-└── tests/               # Test package
-```
+- Native windows (`WebKit` / `WebView2`)
+- Typed JS <-> MoonBit bridge
+- Plugin-style command routing
+- Parent/child process IPC APIs
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    subgraph Frontend["Frontend Runtime (WebView Page)"]
-        UI["JavaScript UI"]
-        JSAPI["window.MoonBitBridge<br/>window.MoonBitPlugins"]
-        UI --> JSAPI
+flowchart LR
+    subgraph JS["JavaScript Runtime"]
+        JSAPI["window.MoonBitBridge / window.MoonBitPlugins"]
     end
 
-    subgraph MoonBit["MoonBit Runtime"]
-        BR["CommandBridge<br/>command.mbt"]
-        PL["PluginHost / PluginContext<br/>plugin.mbt"]
-        WV["WebView API<br/>webview.mbt"]
-        PB["Process Bridge (optional)<br/>process_bridge.mbt + managed_app.mbt"]
-        JSAPI --> BR
-        BR --> PL
-        PL --> WV
-        PB --> PL
+    subgraph MB["MoonBit Runtime"]
+        WV["WebView"]
+        PL["PluginHost + CommandRouter"]
+        WM["WindowManager (IPC)"]
+        APP["Managed App (parent/child)"]
     end
 
-    subgraph Native["Native Layer"]
-        FFI["FFI Declarations<br/>binding.mbt"]
-        STUB["Native Stub Runtime<br/>stub.c"]
-        LIB["webview C Library<br/>WebKit / WebView2"]
-        WV --> FFI
-        FFI --> STUB
-        STUB --> LIB
+    subgraph NATIVE["Native Layer"]
+        STUB["stub.c + binding.mbt"]
+        LIB["webview C library"]
     end
+
+    JSAPI <-->|"Command request/response"| PL
+    PL <-->|"Cross-process command/event"| WM
+    APP --> WM
+    PL --> WV
+    WV --> STUB --> LIB
 ```
 
-## Core Components
+## API List
 
-### `WebView` (`webview.mbt`)
+API list below is aligned with [`pkg.generated.mbti`](/Users/luoyuhang.22/Code/lepus-apps/lepus_webview/pkg.generated.mbti).
 
-`WebView` is the main runtime abstraction for window lifecycle and JS integration.
-It wraps the native webview handle and exposes APIs such as `run`, `destroy`,
-`bind`, `unbind`, `eval`, `init`, `set_html`, `navigate`, and `response`.
+### `WebView`
 
-### `CommandBridge` (`command.mbt`)
+- Lifecycle: `destroy`, `terminate`
+- Window/UI: `set_title`, `set_size`, `set_html`, `navigate`
+- History: `back`, `forward`, `go`, `reload`, `reload_force`
+- Handle: `get_handle`
 
-`CommandBridge` implements the base JS <-> MoonBit RPC protocol:
+### `Window` (Managed App)
 
-- JS invokes `window[global].send(name, payload)`
-- MoonBit handlers decode payload and return typed replies
-- MoonBit can push events back to JS listeners
+- Setup: `new`, `install`, `set_html`, `navigate`
+- History: `back`, `forward`, `go`, `reload`, `reload_force`
+- Run: `run`
 
-### `PluginHost` (`plugin.mbt`)
+### `Plugin` / `PluginHost` / `PluginContext`
 
-`PluginHost` builds a namespaced command surface on top of `CommandBridge`:
+- Plugin build/install: `Plugin::new`, `PluginInternal::new`, `PluginHost::new`, `PluginHost::install`, `PluginHost::destroy`
+- Context handlers: `command_async`, `command_result_async`, `command_result_bg`
+- Bridge access: `PluginHost::command_bridge`, `PluginHost::global_name`
 
-- Register commands per plugin via `PluginContext`
-- Expose plugin APIs under `window.MoonBitPlugins[plugin][api]`
-- Emit plugin-scoped events to JS subscribers
+### Process Command IPC
 
-### `Process Bridge` (`process_bridge.mbt`, `managed_app.mbt`)
+- Request/response model: `ProcessCommandRequest`, `ProcessCommandResponse`
+- Router: `ProcessCommandRouter::{new, handle, handle_async, handle_result, handle_result_async, dispatch, serve, plugin}`
+- Proxy: `ProcessCommandProxy::{new, call, call_plugin, plugin_handler}`
+- Plugin router: `ProcessPluginRouter::{command, command_async, command_result, command_result_async}`
 
-Used for parent/child process execution models. Current response wire format:
+### Window Manager IPC
 
-- success: `[1, payload]`
-- failure: `[0, error]`
+- Process control: `init`, `fork_process`, `spawn_process`, `connect_child_process`
+- Window control: `create_window`, `create_child_window`, `run_window`, `destroy_window`, `destroy`
+- Messaging: `send_message`, `broadcast`, `request`, `respond`, `try_pop_message`
+- Process-command serving: `serve_process_commands`
+- State: `is_main_process`, `is_child_process`, `wait_child_noblock`
 
-## JavaScript Protocol
+## Example
 
-- Plugin command name format:
-  - `plugin:"<plugin_name>":"<api_name>"`
-- All cross-boundary names are JSON-quoted before script injection
-- JS API surface:
-  - `window.MoonBitBridge.send(name, payload)`
-  - `window.MoonBitPlugins[plugin][api](payload)`
-  - `window.MoonBitPlugins[plugin]["@@on"](...)`
-  - `window.MoonBitPlugins[plugin]["@@onEvent"](...)`
-
-## Build and Run
-
-### Prerequisites
-
-- MoonBit toolchain (`moon`)
-- Native `webview` shared libraries available under `lib/`
-
-### Commands
+Run the included demo:
 
 ```bash
-# Type-check
-moon check
-
-# Run tests
-moon test --target native
-
-# Build runnable demo package
 moon build --target native example
-
-# Run demo
 moon run --target native example
 ```
 
-> For this repository, `example` is the executable package.  
-> The root package is primarily a library package.
+Minimal managed-window example:
 
-## Platform Notes
+```moonbit
+fn main {
+  let win = @webview.Window::new(title="Lepus WebView", width=960, height=640)
+  win.set_html("<html><body><h1>Hello from MoonBit</h1></body></html>")
+  win.run()
+}
+```
 
-- Native target only (`supported_targets = "+native"`)
-- No WASM target support
-- macOS/Linux use linker flags such as `-Llib -lwebview -Wl,-rpath,lib`
-- Windows uses `webview.dll` + `webview.lib` with `_WIN32` adaptation in `stub.c`
-- `fork`-based APIs are POSIX-only; Windows should use `spawn/connect` flow
+## Build & Test
 
-## FFI and Ownership Model
-
-- `binding.mbt` remains a thin extern declaration layer
-- Ownership annotations follow MoonBit FFI semantics:
-  - `#borrow(param)` for call-scoped use
-  - `#owned(param)` when C side retains ownership
-- C-owned MoonBit objects must be released with `moonbit_decref` in native code
-
-## Development Guidelines
-
-- Keep business logic out of `binding.mbt`; implement glue in `stub.c`
-- Prefer typed command handlers over ad-hoc JSON parsing in application code
-- Use `abort(...)` for invariants and explicit error responses for recoverable failures
-- Maintain strict namespacing for plugin APIs and injected JS globals
+```bash
+moon check
+moon test --target native
+moon build --target native
+```
 
 ## License
 
