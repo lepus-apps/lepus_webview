@@ -16,7 +16,7 @@ pub struct Window {
   mut transparent : Bool
   mut title_bar_style : TitleBarStyle
   mut title_bar_overlay : Bool
-  mut traffic_light_position : TrafficLightPosition
+  mut traffic_light_position : (Int, Int)
   enable_window_controls_plugin : Bool
   mut url : String
   mut html : String
@@ -43,7 +43,7 @@ pub fn Window::new(
   transparent? : Bool = false,
   title_bar_style? : TitleBarStyle = TitleBarStyle::Default,
   title_bar_overlay? : Bool = false,
-  traffic_light_position? : TrafficLightPosition = { x: -1, y: -1 },
+  traffic_light_position? : (Int, Int) = (-1, -1),
   enable_window_controls_plugin? : Bool = true,
 ) -> Window {
   {
@@ -136,7 +136,7 @@ pub fn Window::set_traffic_light_position(
   x : Int,
   y : Int,
 ) -> Unit {
-  self.traffic_light_position = { x, y }
+  self.traffic_light_position = (x, y)
   if self.runtime_window_id > 0 {
     ignore(wm_set_traffic_light_position(self.runtime_window_id, x, y))
   }
@@ -216,10 +216,10 @@ async fn Window::run_child_async(self : Window) -> Unit {
     if self.transparent {
       webview.enable_transparent_background_support()
     }
-    if self.traffic_light_position.x >= 0 && self.traffic_light_position.y >= 0 {
+    if self.traffic_light_position.0 >= 0 && self.traffic_light_position.1 >= 0 {
       webview.set_traffic_light_position(
-        self.traffic_light_position.x,
-        self.traffic_light_position.y,
+        self.traffic_light_position.0,
+        self.traffic_light_position.1,
       )
     }
     if self.html != "" {

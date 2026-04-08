@@ -47,13 +47,6 @@ pub(all) enum TitleBarStyle {
 } derive(Debug, Eq)
 
 ///|
-/// macOS traffic-light buttons position (top-left based).
-pub struct TrafficLightPosition {
-  x : Int
-  y : Int
-} derive(Debug, Eq, ToJson, FromJson, Hash)
-
-///|
 /// Thin high-level wrapper over native window manager (stub.c wm_* APIs).
 pub struct WindowManager {
   process_type : ProcessType
