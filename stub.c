@@ -220,9 +220,74 @@ static ipc_client_t g_ipc_client = {
     .message_seq = 0,
     .state = IPC_CONN_DISCONNECTED};
 
+/* 前向声明：供较早的辅助函数使用。 */
+MOONBIT_FFI_EXPORT int moonbit_wm_dispatch(
+    int window_id,
+    void (*fn)(webview_t, void *),
+    void *arg);
+
 /* ════════════════════════════════════════════════════════════════
    内部辅助函数
    ════════════════════════════════════════════════════════════════ */
+
+static char *dup_cstr(const char *src)
+{
+    size_t len = src ? strlen(src) : 0;
+    char *copy = (char *)malloc(len + 1);
+    if (!copy)
+        return NULL;
+    if (len > 0)
+        memcpy(copy, src, len);
+    copy[len] = '\0';
+    return copy;
+}
+
+typedef struct
+{
+    char *js;
+} eval_js_ctx_t;
+
+static void eval_js_trampoline(webview_t handle, void *arg)
+{
+    eval_js_ctx_t *ctx = (eval_js_ctx_t *)arg;
+    webview_eval(handle, ctx->js);
+    free(ctx->js);
+    free(ctx);
+}
+
+typedef struct
+{
+    char *seq;
+    int status;
+    char *result;
+} return_raw_ctx_t;
+
+static void return_raw_trampoline(webview_t handle, void *arg)
+{
+    return_raw_ctx_t *ctx = (return_raw_ctx_t *)arg;
+    webview_return(handle, ctx->seq, ctx->status, ctx->result);
+    free(ctx->seq);
+    free(ctx->result);
+    free(ctx);
+}
+
+typedef void (*moonbit_thread_closure_t)(void *arg);
+
+typedef struct
+{
+    moonbit_thread_closure_t callback;
+    void *arg;
+} moonbit_thread_task_t;
+
+static void *moonbit_background_thread_main(void *arg)
+{
+    moonbit_thread_task_t *task = (moonbit_thread_task_t *)arg;
+    task->callback(task->arg);
+    if (task->arg)
+        moonbit_decref(task->arg);
+    free(task);
+    return NULL;
+}
 
 /* 通过 window_id 查找窗口节点（需在锁外调用，或已持有锁） */
 static webview_window_t *find_window(int32_t id)
@@ -891,6 +956,46 @@ MOONBIT_FFI_EXPORT int moonbit_wm_run_window(int window_id)
     return 0;
 }
 
+typedef struct
+{
+    int window_id;
+} run_window_async_ctx_t;
+
+static void *run_window_async_main(void *arg)
+{
+    run_window_async_ctx_t *ctx = (run_window_async_ctx_t *)arg;
+    int window_id = ctx->window_id;
+    free(ctx);
+
+    moonbit_wm_run_window(window_id);
+    moonbit_wm_destroy_window(window_id);
+    return NULL;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_run_window_async(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    run_window_async_ctx_t *ctx =
+        (run_window_async_ctx_t *)malloc(sizeof(run_window_async_ctx_t));
+    if (!ctx)
+        return -1;
+    ctx->window_id = window_id;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, run_window_async_main, ctx) != 0)
+    {
+        free(ctx);
+        return -1;
+    }
+    pthread_detach(thread);
+    return 0;
+}
+
 /**
  * 请求窗口退出其事件循环。
  */
@@ -970,9 +1075,31 @@ MOONBIT_FFI_EXPORT int moonbit_wm_eval_js(int window_id, const char *js)
 {
     pthread_mutex_lock(&g_wm.mutex);
     webview_window_t *w = find_window(window_id);
+    int is_running = w && w->state == WINDOW_STATE_RUNNING;
     pthread_mutex_unlock(&g_wm.mutex);
     if (!w || !w->handle)
         return -1;
+
+    if (is_running)
+    {
+        eval_js_ctx_t *ctx = (eval_js_ctx_t *)malloc(sizeof(eval_js_ctx_t));
+        if (!ctx)
+            return -1;
+        ctx->js = dup_cstr(js);
+        if (!ctx->js)
+        {
+            free(ctx);
+            return -1;
+        }
+
+        if (moonbit_wm_dispatch(window_id, eval_js_trampoline, ctx) != 0)
+        {
+            free(ctx->js);
+            free(ctx);
+            return -1;
+        }
+        return 0;
+    }
 
     return webview_eval(w->handle, js);
 }
@@ -986,6 +1113,49 @@ MOONBIT_FFI_EXPORT int moonbit_wm_init_js(int window_id, const char *js)
         return -1;
 
     webview_init(w->handle, js);
+    return 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_return_raw(
+    int window_id,
+    const char *seq,
+    int status,
+    const char *result)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    int is_running = w && w->state == WINDOW_STATE_RUNNING;
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    if (!is_running)
+    {
+        webview_return(w->handle, seq, status, result);
+        return 0;
+    }
+
+    return_raw_ctx_t *ctx = (return_raw_ctx_t *)malloc(sizeof(return_raw_ctx_t));
+    if (!ctx)
+        return -1;
+    ctx->seq = dup_cstr(seq);
+    ctx->result = dup_cstr(result);
+    ctx->status = status;
+    if (!ctx->seq || !ctx->result)
+    {
+        free(ctx->seq);
+        free(ctx->result);
+        free(ctx);
+        return -1;
+    }
+
+    if (moonbit_wm_dispatch(window_id, return_raw_trampoline, ctx) != 0)
+    {
+        free(ctx->seq);
+        free(ctx->result);
+        free(ctx);
+        return -1;
+    }
     return 0;
 }
 
@@ -1639,6 +1809,33 @@ MOONBIT_FFI_EXPORT void moonbit_webview_unbind(
             moonbit_decref(binding->arg);
         free(binding);
     }
+}
+
+MOONBIT_FFI_EXPORT int moonbit_run_in_background_thread(
+    moonbit_thread_closure_t fn,
+    void *arg)
+{
+    moonbit_thread_task_t *task =
+        (moonbit_thread_task_t *)malloc(sizeof(moonbit_thread_task_t));
+    if (!task)
+    {
+        if (arg)
+            moonbit_decref(arg);
+        return -1;
+    }
+    task->callback = fn;
+    task->arg = arg;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, moonbit_background_thread_main, task) != 0)
+    {
+        if (arg)
+            moonbit_decref(arg);
+        free(task);
+        return -1;
+    }
+    pthread_detach(thread);
+    return 0;
 }
 
 /**

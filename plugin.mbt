@@ -234,7 +234,7 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_resul
   callback : async (Payload) -> Reply raise Error,
 ) -> Unit {
   self.install_command_api(api_name, command_name => {
-    self.host.bridge.handle_async(command_name, callback)
+    self.host.bridge.handle_result_async(command_name, callback)
   })
 }
 

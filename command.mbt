@@ -164,7 +164,14 @@ fn[X] CommandBridge::send_response(
     Ok(_) => 0
     Error(_) => 1
   }
-  webview_return_raw(self.webview.handle, @encoding/utf8.encode(id), status, wire)
+  ignore(
+    wm_return_raw(
+      self.webview.window_id,
+      @encoding/utf8.encode(id),
+      status,
+      wire,
+    ),
+  )
 }
 
 // ── Handler registration ──────────────────────────────────────────────────────
@@ -186,7 +193,6 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_async(
         return
       }
     }
-    // Spawn the async callback as background task
     self.webview.task_group.spawn_bg(
       () => {
         let reply = callback(payload)
@@ -231,6 +237,29 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result
     }
     let reply = try? callback(payload)
     bridge.send_response(id, CommandResponse::ok(reply))
+  })
+}
+
+///|
+/// Registers an async typed command handler that can raise errors.
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_async(
+  self : CommandBridge[X],
+  name : String,
+  callback : async (Payload) -> Reply raise Error,
+) -> Unit {
+  self.handlers.set(name, fn(json, id, bridge) {
+    let payload = @json.from_json(json) catch {
+      msg => {
+        bridge.send_response(id, CommandResponse::error("\{msg}"))
+        return
+      }
+    }
+    self.webview.task_group.spawn_bg(
+      () => {
+        let reply = try? callback(payload)
+        bridge.send_response(id, CommandResponse::ok(reply))
+      },
+    )
   })
 }
 

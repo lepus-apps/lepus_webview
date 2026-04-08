@@ -137,6 +137,14 @@ extern "C" fn webview_binding_is_null(binding : BindingHandle) -> Bool = "moonbi
 extern "C" fn webview_copy_cstr(cstr : Bytes) -> Bytes = "moonbit_webview_copy_cstr"
 
 ///|
+/// Run a MoonBit closure on a detached native thread.
+#owned(closure)
+extern "C" fn run_in_background_thread(
+  call_closure : FuncRef[(() -> Unit) -> Unit],
+  closure : () -> Unit,
+) -> Int = "moonbit_run_in_background_thread"
+
+///|
 /// Initialize native window manager runtime.
 pub extern "C" fn wm_init(is_main_process : Int) -> Int = "moonbit_wm_init"
 
@@ -166,6 +174,10 @@ pub extern "C" fn wm_destroy_window(window_id : Int) -> Int = "moonbit_wm_destro
 ///|
 /// Run managed window event loop.
 pub extern "C" fn wm_run_window(window_id : Int) -> Int = "moonbit_wm_run_window"
+
+///|
+/// Start managed window event loop on a detached native thread.
+pub extern "C" fn wm_run_window_async(window_id : Int) -> Int = "moonbit_wm_run_window_async"
 
 ///|
 /// Request window termination.
@@ -227,6 +239,16 @@ pub extern "C" fn wm_get_parent_window_id(window_id : Int) -> Int = "moonbit_wm_
 ///|
 /// Get native handle by managed window id.
 pub extern "C" fn wm_get_handle(window_id : Int) -> WebView_t = "moonbit_wm_get_handle"
+
+///|
+/// Respond to a JS binding call on the managed window UI thread.
+#borrow(seq, result)
+pub extern "C" fn wm_return_raw(
+  window_id : Int,
+  seq : Bytes,
+  status : Int,
+  result : Bytes,
+) -> Int = "moonbit_wm_return_raw"
 
 ///|
 /// Create child-process window.

@@ -185,8 +185,6 @@ pub fn[X] WebView::set_size(
 ///|
 /// Runs the main event loop until terminated, then destroys the webview.
 pub fn[X] WebView::run(self : WebView[X]) -> Unit {
-  self.task_group.spawn_bg(() => {
-    ignore(wm_run_window(self.window_id))
-    self.destroy()
-  })
+  ignore(wm_run_window(self.window_id))
+  self.destroy()
 }
