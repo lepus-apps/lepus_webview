@@ -13,12 +13,23 @@
 /// }
 /// ```
 ///
-/// `on_install` runs after the plugin has finished registering commands and
-/// JS helpers on the host.
-struct PluginInternal[X] {
+/// Managed plugins are built once and then used in both:
+/// - parent process: register real handlers
+/// - child process: register proxy handlers or direct handlers
+pub struct Plugin {
   name : String
-  register : (PluginContext[X]) -> Unit
-  on_install : (PluginContext[X]) -> Unit
+  parent_installers : Array[(ProcessPluginRouter) -> Unit]
+  child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
+  direct_installers : Array[(PluginContext[Unit]) -> Unit]
+}
+
+///|
+/// Registration context used while building a managed `Plugin`.
+pub struct PluginBuilder {
+  plugin_name : String
+  parent_installers : Array[(ProcessPluginRouter) -> Unit]
+  child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
+  direct_installers : Array[(PluginContext[Unit]) -> Unit]
 }
 
 ///|
@@ -43,13 +54,84 @@ struct PluginContext[X] {
 }
 
 ///|
-/// Builds a plugin value that can later be installed on a `PluginHost`.
-pub fn[X] PluginInternal::new(
-  name : String,
-  register : (PluginContext[X]) -> Unit,
-  on_install? : (PluginContext[X]) -> Unit = fn(_context) {  },
-) -> PluginInternal[X] {
-  PluginInternal::{ name, register, on_install }
+/// Creates a managed plugin whose commands are available from JavaScript
+/// without exposing IPC details to user code.
+pub fn Plugin::new(name : String, register : (PluginBuilder) -> Unit) -> Plugin {
+  let builder = PluginBuilder::{
+    plugin_name: name,
+    parent_installers: [],
+    child_installers: [],
+    direct_installers: [],
+  }
+  register(builder)
+  {
+    name,
+    parent_installers: builder.parent_installers,
+    child_installers: builder.child_installers,
+    direct_installers: builder.direct_installers,
+  }
+}
+
+///|
+/// Registers a typed synchronous plugin command.
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command(
+  self : PluginBuilder,
+  api_name : String,
+  callback : (Payload) -> Reply,
+) -> Unit {
+  let plugin_name = self.plugin_name
+  self.parent_installers.push(router => router.command(api_name, callback))
+  self.child_installers.push((plugin, proxy) => {
+    let handler : (Payload) -> Reply raise = proxy.plugin_handler(
+      plugin_name, api_name,
+    )
+    plugin.command_result_bg(api_name, handler)
+  })
+  self.direct_installers.push(plugin => {
+    let handler : (Payload) -> Reply raise = payload => callback(payload)
+    plugin.command_result_bg(api_name, handler)
+  })
+}
+
+///|
+/// Registers a typed async plugin command.
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command_async(
+  self : PluginBuilder,
+  api_name : String,
+  callback : async (Payload) -> Reply,
+) -> Unit {
+  let plugin_name = self.plugin_name
+  self.parent_installers.push(router => router.command_async(api_name, callback))
+  self.child_installers.push((plugin, proxy) => {
+    let handler : (Payload) -> Reply raise = proxy.plugin_handler(
+      plugin_name, api_name,
+    )
+    plugin.command_result_bg(api_name, handler)
+  })
+  self.direct_installers.push(plugin => plugin.command_async(api_name, callback))
+}
+
+///|
+/// Registers a typed async plugin command that can raise explicit command
+/// errors.
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command_result_async(
+  self : PluginBuilder,
+  api_name : String,
+  callback : async (Payload) -> Reply raise Error,
+) -> Unit {
+  let plugin_name = self.plugin_name
+  self.parent_installers.push(router => {
+    router.command_result_async(api_name, callback)
+  })
+  self.child_installers.push((plugin, proxy) => {
+    let handler : (Payload) -> Reply raise = proxy.plugin_handler(
+      plugin_name, api_name,
+    )
+    plugin.command_result_bg(api_name, handler)
+  })
+  self.direct_installers.push(plugin => {
+    plugin.command_result_async(api_name, callback)
+  })
 }
 
 ///|
@@ -72,11 +154,12 @@ pub fn[X] PluginHost::new(
 ///
 /// This aborts if another plugin with the same name has already been
 /// installed on this host.
-pub fn[X] PluginHost::install(
-  self : PluginHost[X],
-  plugin : PluginInternal[X],
+pub fn PluginHost::install(
+  self : PluginHost[Unit],
+  plugin : Plugin,
+  proxy? : ProcessCommandProxy? = None,
 ) -> Unit {
-  guard !is_reserved_plugin_name(plugin.name) else {
+  guard !is_disallowed_js_property_name(plugin.name) else {
     abort("PluginHost::install: reserved plugin name: " + plugin.name)
   }
   guard self.plugins.get(plugin.name) is None else {
@@ -87,8 +170,16 @@ pub fn[X] PluginHost::install(
   self.install_script(
     make_plugin_namespace_script(self.global_name, plugin.name),
   )
-  (plugin.register)(context)
-  (plugin.on_install)(context)
+  match proxy {
+    Some(proxy) =>
+      for install in plugin.child_installers {
+        install(context, proxy)
+      }
+    None =>
+      for install in plugin.direct_installers {
+        install(context)
+      }
+  }
 }
 
 ///|
@@ -159,11 +250,11 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_resul
 }
 
 ///|
-fn[X] PluginContext::register_api(
+pub fn[X] PluginContext::register_api(
   self : PluginContext[X],
   api_name : String,
 ) -> String {
-  guard !is_reserved_api_name(api_name) else {
+  guard !is_disallowed_js_property_name(api_name) else {
     abort(
       "PluginContext::register_api: reserved API name: " +
       self.plugin_name +
@@ -185,7 +276,7 @@ fn[X] PluginContext::register_api(
 }
 
 ///|
-fn[X] PluginContext::install_command_api(
+pub fn[X] PluginContext::install_command_api(
   self : PluginContext[X],
   api_name : String,
   register : (String) -> Unit,
@@ -204,7 +295,10 @@ fn[X] PluginContext::install_command_api(
 }
 
 ///|
-fn[X] PluginHost::install_script(self : PluginHost[X], script : String) -> Unit {
+pub fn[X] PluginHost::install_script(
+  self : PluginHost[X],
+  script : String,
+) -> Unit {
   self.webview.init(script)
   self.webview.eval(script)
 }
@@ -222,21 +316,6 @@ fn plugin_command_name(plugin_name : String, api_name : String) -> String {
 ///|
 fn is_disallowed_js_property_name(name : String) -> Bool {
   name is (['@', '@', ..] | "__proto__" | "prototype" | "constructor")
-}
-
-///|
-fn is_reserved_plugin_name(plugin_name : String) -> Bool {
-  is_reserved_js_name(plugin_name)
-}
-
-///|
-fn is_reserved_api_name(api_name : String) -> Bool {
-  is_reserved_js_name(api_name)
-}
-
-///|
-fn is_reserved_js_name(name : String) -> Bool {
-  is_disallowed_js_property_name(name)
 }
 
 ///|
@@ -281,11 +360,11 @@ fn make_plugin_api_script(
 
 ///|
 test "reserved plugin and api names share JS property guard" {
-  assert_true(is_reserved_plugin_name("@@call"))
-  assert_true(is_reserved_plugin_name("__proto__"))
-  assert_true(is_reserved_api_name("constructor"))
-  assert_false(is_reserved_plugin_name("math"))
-  assert_false(is_reserved_api_name("sum"))
+  assert_true(is_disallowed_js_property_name("@@call"))
+  assert_true(is_disallowed_js_property_name("__proto__"))
+  assert_true(is_disallowed_js_property_name("constructor"))
+  assert_false(is_disallowed_js_property_name("math"))
+  assert_false(is_disallowed_js_property_name("sum"))
 }
 
 ///|
