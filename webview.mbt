@@ -82,7 +82,7 @@ fn[X] WebView::new_managed(
   transparent? : Bool = false,
   title_bar_style? : TitleBarStyle = Default,
   title_bar_overlay? : Bool = false,
-  traffic_light_position? : TrafficLightPosition = { x: -1, y: -1 },
+  traffic_light_position? : (Int, Int) = (-1, -1),
 ) -> WebView[X] {
   let create_debug = if devtools && debug <= 0 { 1 } else { debug }
   let window_id = wm_create_window(
@@ -142,12 +142,12 @@ fn[X] WebView::new_managed(
       },
     ),
   )
-  if traffic_light_position.x >= 0 && traffic_light_position.y >= 0 {
+  if traffic_light_position.0 >= 0 && traffic_light_position.1 >= 0 {
     ignore(
       wm_set_traffic_light_position(
         window_id,
-        traffic_light_position.x,
-        traffic_light_position.y,
+        traffic_light_position.0,
+        traffic_light_position.1,
       ),
     )
   }

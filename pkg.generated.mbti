@@ -67,6 +67,8 @@ pub fn wm_run_window(Int) -> Int
 
 pub fn wm_run_window_async(Int) -> Int
 
+pub fn wm_set_devtools(Int, Int) -> Int
+
 pub fn wm_set_fullscreen_window(Int, Int) -> Int
 
 pub fn wm_set_html(Int, Bytes) -> Int
@@ -79,7 +81,7 @@ pub fn wm_set_traffic_light_position(Int, Int, Int) -> Int
 
 pub fn wm_set_visibility(Int, Int) -> Int
 
-pub fn wm_set_window_customization(Int, Int, Int, Int, Int, TitleBarStyle, Int) -> Int
+pub fn wm_set_window_customization(Int, Int, Int, Int, Int, Int, TitleBarStyle, Int) -> Int
 
 pub fn wm_spawn_process(Bytes, Bytes) -> Int
 
@@ -235,11 +237,6 @@ pub(all) enum TitleBarStyle {
   Hidden
 } derive(Eq, @debug.Debug)
 
-pub(all) struct TrafficLightPosition {
-  x : Int
-  y : Int
-} derive(Eq, Hash, ToJson, @debug.Debug, @json.FromJson)
-
 type WebView[X]
 pub fn[X] WebView::back(Self[X]) -> Unit
 pub fn[X] WebView::close(Self[X]) -> Unit
@@ -254,12 +251,13 @@ pub fn[X] WebView::minimize(Self[X]) -> Unit
 pub fn[X] WebView::navigate(Self[X], String) -> Unit
 pub fn[X] WebView::reload(Self[X]) -> Unit
 pub fn[X] WebView::reload_force(Self[X]) -> Unit
+pub fn[X] WebView::set_devtools(Self[X], Bool) -> Unit
 pub fn[X] WebView::set_fullscreen(Self[X], Bool) -> Unit
 pub fn[X] WebView::set_html(Self[X], String) -> Unit
 pub fn[X] WebView::set_size(Self[X], Int, Int, SizeHint) -> Unit
 pub fn[X] WebView::set_title(Self[X], String) -> Unit
 pub fn[X] WebView::set_traffic_light_position(Self[X], Int, Int) -> Unit
-pub fn[X] WebView::set_window_customization(Self[X], Bool, Bool, Bool, Bool, TitleBarStyle, Bool) -> Unit
+pub fn[X] WebView::set_window_customization(Self[X], Bool, Bool, Bool, Bool, Bool, TitleBarStyle, Bool) -> Unit
 pub fn[X] WebView::start_drag(Self[X]) -> Unit
 pub fn[X] WebView::terminate(Self[X]) -> Unit
 pub fn[X] WebView::toggle_fullscreen(Self[X]) -> Unit
@@ -275,14 +273,16 @@ pub struct Window {
   height : Int
   size_hint : SizeHint
   debug : Int
+  devtools : Bool
   child_arg : String
   mut frameless : Bool
   mut resizable : Bool
+  mut closeable : Bool
   mut always_on_top : Bool
   mut transparent : Bool
   mut title_bar_style : TitleBarStyle
   mut title_bar_overlay : Bool
-  mut traffic_light_position : TrafficLightPosition
+  mut traffic_light_position : (Int, Int)
   enable_window_controls_plugin : Bool
   mut url : String
   mut html : String
@@ -295,12 +295,12 @@ pub fn Window::install(Self, Plugin) -> Unit
 pub fn Window::maximize(Self) -> Unit
 pub fn Window::minimize(Self) -> Unit
 pub fn Window::navigate(Self, String) -> Unit
-pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String, frameless? : Bool, resizable? : Bool, always_on_top? : Bool, transparent? : Bool, title_bar_style? : TitleBarStyle, title_bar_overlay? : Bool, traffic_light_position? : TrafficLightPosition, enable_window_controls_plugin? : Bool) -> Self
+pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, devtools? : Bool, child_arg? : String, frameless? : Bool, resizable? : Bool, closeable? : Bool, always_on_top? : Bool, transparent? : Bool, title_bar_style? : TitleBarStyle, title_bar_overlay? : Bool, traffic_light_position? : (Int, Int), enable_window_controls_plugin? : Bool) -> Self
 pub fn Window::run(Self) -> Unit
 pub fn Window::set_fullscreen(Self, Bool) -> Unit
 pub fn Window::set_html(Self, String) -> Unit
 pub fn Window::set_traffic_light_position(Self, Int, Int) -> Unit
-pub fn Window::set_window_customization(Self, Bool, Bool, Bool, Bool, TitleBarStyle, Bool) -> Unit
+pub fn Window::set_window_customization(Self, Bool, Bool, Bool, Bool, Bool, TitleBarStyle, Bool) -> Unit
 pub fn Window::start_drag(Self) -> Unit
 pub fn Window::toggle_fullscreen(Self) -> Unit
 pub fn Window::toggle_maximize(Self) -> Unit
@@ -328,9 +328,10 @@ pub fn WindowManager::respond(Self, Int, Int, Int, String) -> Int
 pub fn WindowManager::run_window(Self, Int) -> Int
 pub fn WindowManager::send_message(Self, Int, Int, IpcMessageType, String, String) -> Int
 pub async fn WindowManager::serve_process_commands(Self, Int, async (ProcessCommandRequest) -> ProcessCommandResponse, subtype? : String) -> Unit
+pub fn WindowManager::set_devtools(Self, Int, Bool) -> Int
 pub fn WindowManager::set_fullscreen_window(Self, Int, Bool) -> Int
 pub fn WindowManager::set_traffic_light_position(Self, Int, Int, Int) -> Int
-pub fn WindowManager::set_window_customization(Self, Int, Bool, Bool, Bool, Bool, TitleBarStyle, Bool) -> Int
+pub fn WindowManager::set_window_customization(Self, Int, Bool, Bool, Bool, Bool, Bool, TitleBarStyle, Bool) -> Int
 pub fn WindowManager::spawn_process(Self, String, String) -> Int
 pub fn WindowManager::start_drag_window(Self, Int) -> Int
 pub fn WindowManager::toggle_fullscreen_window(Self, Int) -> Int
