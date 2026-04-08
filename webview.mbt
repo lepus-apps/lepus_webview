@@ -74,7 +74,10 @@ fn[X] WebView::new_managed(
   width? : Int = 800,
   height? : Int = 600,
   debug? : Int = 0,
-  customization? : WindowCustomization = WindowCustomization::default(),
+  frameless? : Bool = false,
+  resizable? : Bool = true,
+  always_on_top? : Bool = false,
+  transparent? : Bool = false,
 ) -> WebView[X] {
   let window_id = wm_create_window(
     @encoding/utf8.encode(title),
@@ -97,17 +100,22 @@ fn[X] WebView::new_managed(
   ignore(
     wm_set_window_customization(
       window_id,
-      if customization.frameless {
+      if frameless {
         1
       } else {
         0
       },
-      if customization.resizable {
+      if resizable {
         1
       } else {
         0
       },
-      if customization.always_on_top {
+      if always_on_top {
+        1
+      } else {
+        0
+      },
+      if transparent {
         1
       } else {
         0
@@ -242,22 +250,30 @@ pub fn[X] WebView::set_size(
 /// Applies native custom-window style flags at runtime.
 pub fn[X] WebView::set_window_customization(
   self : WebView[X],
-  customization : WindowCustomization,
+  frameless : Bool,
+  resizable : Bool,
+  always_on_top : Bool,
+  transparent : Bool,
 ) -> Unit {
   ignore(
     wm_set_window_customization(
       self.window_id,
-      if customization.frameless {
+      if frameless {
         1
       } else {
         0
       },
-      if customization.resizable {
+      if resizable {
         1
       } else {
         0
       },
-      if customization.always_on_top {
+      if always_on_top {
+        1
+      } else {
+        0
+      },
+      if transparent {
         1
       } else {
         0
@@ -283,6 +299,34 @@ pub fn[X] WebView::enable_custom_titlebar_support(self : WebView[X]) -> Unit {
       #|  ].join('');
       #|  document.documentElement.appendChild(style);
       #|  window.__LEPUS_DRAG_STYLE__ = true;
+      #|})();
+    ),
+  )
+}
+
+///|
+/// Injects CSS/JS that keeps page background transparent.
+pub fn[X] WebView::enable_transparent_background_support(
+  self : WebView[X],
+) -> Unit {
+  self.init(
+    (
+      #|(() => {
+      #|  if (window.__LEPUS_TRANSPARENT_BG__) return;
+      #|  const style = document.createElement('style');
+      #|  style.textContent = [
+      #|    'html, body { background: transparent !important; }',
+      #|  ].join('');
+      #|  document.documentElement.appendChild(style);
+      #|  const apply = () => {
+      #|    document.documentElement.style.background = 'transparent';
+      #|    if (document.body) document.body.style.background = 'transparent';
+      #|  };
+      #|  apply();
+      #|  if (document.readyState === 'loading') {
+      #|    document.addEventListener('DOMContentLoaded', apply, { once: true });
+      #|  }
+      #|  window.__LEPUS_TRANSPARENT_BG__ = true;
       #|})();
     ),
   )

@@ -12,6 +12,7 @@ options(
     "native": {
       // MacOS / Linux: use pre-built webview shared library
       "cc-link-flags": "-Llib -lwebview -Wl,-rpath,lib",
+      // "cc-link-flags": "-L../lib -lwebview -Wl,-rpath,../lib",
       // Windows
       // "cc-link-flags": "lib/webview.lib",
     },

@@ -17,13 +17,19 @@ async fn sum_async_handler(payload : SumPayload) -> SumReply {
 
 ///|
 fn main {
-  let window = @webview.Window::new(title="title", width=800, height=600)
+  let window = @webview.Window::new(
+    title="title",
+    width=800,
+    height=600,
+    // frameless=true,
+    // transparent=true,
+  )
   window.install(
     @webview.Plugin::new("math", plugin => {
       plugin.command("sum", (payload : SumPayload) => SumReply::{
         total: payload.left + payload.right,
       })
-      plugin.command_async("sum_async", sum_async_handler)
+      plugin.command("sum_async", sum_async_handler)
     }),
   )
   window.install(

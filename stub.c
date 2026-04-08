@@ -281,8 +281,7 @@ static int winsock_init(void)
 #endif
 
 #ifdef __APPLE__
-#include <objc/message.h>
-#include <objc/runtime.h>
+#include <dlfcn.h>
 #endif
 
 /* ── webview 前向声明 ─────────────────────────────────────────── */
@@ -1470,11 +1469,74 @@ static void *moonbit_window_native_handle(webview_window_t *w)
     return (void *)(intptr_t)native;
 }
 
+#ifdef __APPLE__
+typedef void *mb_id_t;
+typedef void *mb_sel_t;
+typedef mb_sel_t (*mb_sel_register_name_t)(const char *);
+typedef mb_id_t (*mb_objc_get_class_t)(const char *);
+typedef unsigned long (*mb_objc_msgsend_u64_t)(mb_id_t, mb_sel_t);
+typedef mb_id_t (*mb_objc_msgsend_id_ret_t)(mb_id_t, mb_sel_t);
+typedef mb_id_t (*mb_objc_msgsend_cstr_arg_ret_t)(mb_id_t, mb_sel_t, const char *);
+typedef mb_id_t (*mb_objc_msgsend_int_arg_ret_t)(mb_id_t, mb_sel_t, int);
+typedef mb_id_t (*mb_objc_msgsend_u64_arg_ret_t)(mb_id_t, mb_sel_t, unsigned long);
+typedef void (*mb_objc_msgsend_u64_arg_t)(mb_id_t, mb_sel_t, unsigned long);
+typedef void (*mb_objc_msgsend_long_arg_t)(mb_id_t, mb_sel_t, long);
+typedef void (*mb_objc_msgsend_int_arg_t)(mb_id_t, mb_sel_t, int);
+typedef void (*mb_objc_msgsend_id_arg_t)(mb_id_t, mb_sel_t, mb_id_t);
+typedef void (*mb_objc_msgsend_id_id_arg_t)(mb_id_t, mb_sel_t, mb_id_t, mb_id_t);
+
+static void *moonbit_objc_msgsend_symbol(void)
+{
+    static void *sym = NULL;
+    static int loaded = 0;
+    if (!loaded)
+    {
+        void *lib = dlopen("/usr/lib/libobjc.A.dylib", RTLD_LAZY);
+        if (!lib)
+            lib = dlopen("/usr/lib/libobjc.dylib", RTLD_LAZY);
+        sym = lib ? dlsym(lib, "objc_msgSend") : NULL;
+        loaded = 1;
+    }
+    return sym;
+}
+
+static mb_sel_t moonbit_sel_register_name(const char *name)
+{
+    static mb_sel_register_name_t fn = NULL;
+    static int loaded = 0;
+    if (!loaded)
+    {
+        void *lib = dlopen("/usr/lib/libobjc.A.dylib", RTLD_LAZY);
+        if (!lib)
+            lib = dlopen("/usr/lib/libobjc.dylib", RTLD_LAZY);
+        fn = lib ? (mb_sel_register_name_t)dlsym(lib, "sel_registerName") : NULL;
+        loaded = 1;
+    }
+    return fn ? fn(name) : NULL;
+}
+
+static mb_id_t moonbit_objc_get_class(const char *name)
+{
+    static mb_objc_get_class_t fn = NULL;
+    static int loaded = 0;
+    if (!loaded)
+    {
+        void *lib = dlopen("/usr/lib/libobjc.A.dylib", RTLD_LAZY);
+        if (!lib)
+            lib = dlopen("/usr/lib/libobjc.dylib", RTLD_LAZY);
+        fn = lib ? (mb_objc_get_class_t)dlsym(lib, "objc_getClass") : NULL;
+        loaded = 1;
+    }
+    return fn ? fn(name) : NULL;
+}
+#endif
+
 MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     int window_id,
     int frameless,
     int resizable,
-    int always_on_top)
+    int always_on_top,
+    int transparent)
 {
     pthread_mutex_lock(&g_wm.mutex);
     webview_window_t *w = find_window(window_id);
@@ -1496,6 +1558,16 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     else
         style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
     SetWindowLong(hwnd, GWL_STYLE, style);
+    LONG exstyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+    if (transparent)
+        exstyle |= WS_EX_LAYERED;
+    else
+        exstyle &= ~WS_EX_LAYERED;
+    SetWindowLong(hwnd, GWL_EXSTYLE, exstyle);
+    if (transparent)
+        SetLayeredWindowAttributes(hwnd, 0, 235, LWA_ALPHA);
+    else
+        SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
     SetWindowPos(
         hwnd,
         always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST,
@@ -1507,11 +1579,14 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     return 0;
 #elif defined(__APPLE__)
     void *ns_window = moonbit_window_native_handle(w);
-    if (!ns_window)
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
         return -1;
-    SEL sel_style_mask = sel_registerName("styleMask");
-    SEL sel_set_style_mask = sel_registerName("setStyleMask:");
-    unsigned long style = ((unsigned long(*)(id, SEL))objc_msgSend)((id)ns_window, sel_style_mask);
+    mb_sel_t sel_style_mask = moonbit_sel_register_name("styleMask");
+    mb_sel_t sel_set_style_mask = moonbit_sel_register_name("setStyleMask:");
+    if (!sel_style_mask || !sel_set_style_mask)
+        return -1;
+    unsigned long style = ((mb_objc_msgsend_u64_t)msgsend)((mb_id_t)ns_window, sel_style_mask);
     const unsigned long NSWindowStyleMaskTitled = 1UL << 0;
     const unsigned long NSWindowStyleMaskClosable = 1UL << 1;
     const unsigned long NSWindowStyleMaskMiniaturizable = 1UL << 2;
@@ -1531,22 +1606,63 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
         style |= NSWindowStyleMaskResizable;
     else
         style &= ~NSWindowStyleMaskResizable;
-    ((void (*)(id, SEL, unsigned long))objc_msgSend)((id)ns_window, sel_set_style_mask, style);
+    ((mb_objc_msgsend_u64_arg_t)msgsend)((mb_id_t)ns_window, sel_set_style_mask, style);
     if (frameless)
     {
-        ((void (*)(id, SEL, long))objc_msgSend)((id)ns_window, sel_registerName("setTitleVisibility:"), 1L);
-        ((void (*)(id, SEL, int))objc_msgSend)((id)ns_window, sel_registerName("setTitlebarAppearsTransparent:"), 1);
-        ((void (*)(id, SEL, int))objc_msgSend)((id)ns_window, sel_registerName("setMovableByWindowBackground:"), 1);
+        ((mb_objc_msgsend_long_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("setTitleVisibility:"), 1L);
+        ((mb_objc_msgsend_int_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("setTitlebarAppearsTransparent:"), 1);
+        ((mb_objc_msgsend_int_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("setMovableByWindowBackground:"), 1);
     }
-    ((void (*)(id, SEL, long))objc_msgSend)(
-        (id)ns_window,
-        sel_registerName("setLevel:"),
+    ((mb_objc_msgsend_long_arg_t)msgsend)(
+        (mb_id_t)ns_window,
+        moonbit_sel_register_name("setLevel:"),
         always_on_top ? 3L : 0L);
+    mb_sel_t sel_set_opaque = moonbit_sel_register_name("setOpaque:");
+    if (sel_set_opaque)
+        ((mb_objc_msgsend_int_arg_t)msgsend)((mb_id_t)ns_window, sel_set_opaque, transparent ? 0 : 1);
+    if (transparent)
+    {
+        mb_id_t ns_color = moonbit_objc_get_class("NSColor");
+        mb_sel_t sel_clear_color = moonbit_sel_register_name("clearColor");
+        mb_sel_t sel_set_background = moonbit_sel_register_name("setBackgroundColor:");
+        if (ns_color && sel_clear_color && sel_set_background)
+        {
+            mb_id_t clear = ((mb_objc_msgsend_id_ret_t)msgsend)(ns_color, sel_clear_color);
+            ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, sel_set_background, clear);
+        }
+        mb_sel_t sel_content_view = moonbit_sel_register_name("contentView");
+        mb_sel_t sel_subviews = moonbit_sel_register_name("subviews");
+        mb_sel_t sel_count = moonbit_sel_register_name("count");
+        mb_sel_t sel_object_at_index = moonbit_sel_register_name("objectAtIndex:");
+        mb_sel_t sel_set_opaque = moonbit_sel_register_name("setOpaque:");
+        mb_sel_t sel_set_value_for_key = moonbit_sel_register_name("setValue:forKey:");
+        mb_id_t content_view = sel_content_view ? ((mb_objc_msgsend_id_ret_t)msgsend)((mb_id_t)ns_window, sel_content_view) : NULL;
+        mb_id_t views = (content_view && sel_subviews) ? ((mb_objc_msgsend_id_ret_t)msgsend)(content_view, sel_subviews) : NULL;
+        unsigned long count = (views && sel_count) ? ((mb_objc_msgsend_u64_t)msgsend)(views, sel_count) : 0;
+        mb_id_t ns_number = moonbit_objc_get_class("NSNumber");
+        mb_id_t ns_string = moonbit_objc_get_class("NSString");
+        mb_sel_t sel_number_with_bool = moonbit_sel_register_name("numberWithBool:");
+        mb_sel_t sel_string_with_utf8 = moonbit_sel_register_name("stringWithUTF8String:");
+        mb_id_t bool_no = (ns_number && sel_number_with_bool) ? ((mb_objc_msgsend_int_arg_ret_t)msgsend)(ns_number, sel_number_with_bool, 0) : NULL;
+        mb_id_t key_draws_background =
+            (ns_string && sel_string_with_utf8) ? ((mb_objc_msgsend_cstr_arg_ret_t)msgsend)(ns_string, sel_string_with_utf8, "drawsBackground") : NULL;
+        for (unsigned long i = 0; i < count; i++)
+        {
+            mb_id_t view = sel_object_at_index ? ((mb_objc_msgsend_u64_arg_ret_t)msgsend)(views, sel_object_at_index, i) : NULL;
+            if (!view)
+                continue;
+            if (sel_set_opaque)
+                ((mb_objc_msgsend_int_arg_t)msgsend)(view, sel_set_opaque, 0);
+            if (sel_set_value_for_key && bool_no && key_draws_background)
+                ((mb_objc_msgsend_id_id_arg_t)msgsend)(view, sel_set_value_for_key, bool_no, key_draws_background);
+        }
+    }
     return 0;
 #else
     (void)frameless;
     (void)resizable;
     (void)always_on_top;
+    (void)transparent;
     return 0;
 #endif
 }
@@ -1566,9 +1682,10 @@ MOONBIT_FFI_EXPORT int moonbit_wm_minimize_window(int window_id)
     return 0;
 #elif defined(__APPLE__)
     void *ns_window = moonbit_window_native_handle(w);
-    if (!ns_window)
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
         return -1;
-    ((void (*)(id, SEL, id))objc_msgSend)((id)ns_window, sel_registerName("performMiniaturize:"), (id)ns_window);
+    ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("performMiniaturize:"), (mb_id_t)ns_window);
     return 0;
 #else
     return -1;
@@ -1590,9 +1707,10 @@ MOONBIT_FFI_EXPORT int moonbit_wm_toggle_maximize_window(int window_id)
     return 0;
 #elif defined(__APPLE__)
     void *ns_window = moonbit_window_native_handle(w);
-    if (!ns_window)
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
         return -1;
-    ((void (*)(id, SEL, id))objc_msgSend)((id)ns_window, sel_registerName("zoom:"), (id)ns_window);
+    ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("zoom:"), (mb_id_t)ns_window);
     return 0;
 #else
     return -1;
@@ -1614,9 +1732,10 @@ MOONBIT_FFI_EXPORT int moonbit_wm_close_window(int window_id)
     return 0;
 #elif defined(__APPLE__)
     void *ns_window = moonbit_window_native_handle(w);
-    if (!ns_window)
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    if (!ns_window || !msgsend)
         return -1;
-    ((void (*)(id, SEL, id))objc_msgSend)((id)ns_window, sel_registerName("performClose:"), (id)ns_window);
+    ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("performClose:"), (mb_id_t)ns_window);
     return 0;
 #else
     return moonbit_wm_terminate_window(window_id);

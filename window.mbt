@@ -8,7 +8,10 @@ pub struct Window {
   size_hint : SizeHint
   debug : Int
   child_arg : String
-  mut customization : WindowCustomization
+  mut frameless : Bool
+  mut resizable : Bool
+  mut always_on_top : Bool
+  mut transparent : Bool
   mut url : String
   mut html : String
   mut runtime_window_id : Int
@@ -26,7 +29,10 @@ pub fn Window::new(
   size_hint? : SizeHint = SizeHint::None,
   debug? : Int = 0,
   child_arg? : String = "--moonbit-webview-child",
-  customization? : WindowCustomization = WindowCustomization::default(),
+  frameless? : Bool = false,
+  resizable? : Bool = true,
+  always_on_top? : Bool = false,
+  transparent? : Bool = false,
 ) -> Window {
   {
     title,
@@ -35,7 +41,10 @@ pub fn Window::new(
     height,
     debug,
     child_arg,
-    customization,
+    frameless,
+    resizable,
+    always_on_top,
+    transparent,
     html: "",
     runtime_window_id: -1,
     plugins: [],
@@ -47,24 +56,35 @@ pub fn Window::new(
 /// Applies native custom-window style flags.
 pub fn Window::set_window_customization(
   self : Window,
-  customization : WindowCustomization,
+  frameless : Bool,
+  resizable : Bool,
+  always_on_top : Bool,
+  transparent : Bool,
 ) -> Unit {
-  self.customization = customization
+  self.frameless = frameless
+  self.resizable = resizable
+  self.always_on_top = always_on_top
+  self.transparent = transparent
   if self.runtime_window_id > 0 {
     ignore(
       wm_set_window_customization(
         self.runtime_window_id,
-        if customization.frameless {
+        if frameless {
           1
         } else {
           0
         },
-        if customization.resizable {
+        if resizable {
           1
         } else {
           0
         },
-        if customization.always_on_top {
+        if always_on_top {
+          1
+        } else {
+          0
+        },
+        if transparent {
           1
         } else {
           0
@@ -128,11 +148,17 @@ async fn Window::run_child_async(self : Window) -> Unit {
       width=self.width,
       height=self.height,
       debug=self.debug,
-      customization=self.customization,
+      frameless=self.frameless,
+      resizable=self.resizable,
+      always_on_top=self.always_on_top,
+      transparent=self.transparent,
     )
     self.runtime_window_id = webview.window_id()
-    if self.customization.frameless {
+    if self.frameless {
       webview.enable_custom_titlebar_support()
+    }
+    if self.transparent {
+      webview.enable_transparent_background_support()
     }
     self.install_child_plugins(webview, wm)
     if self.html != "" {
