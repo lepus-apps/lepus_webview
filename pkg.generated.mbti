@@ -204,8 +204,15 @@ pub(all) enum SizeHint {
 }
 
 type WebView[X]
+pub fn[X] WebView::back(Self[X]) -> Unit
+pub fn[X] WebView::destroy(Self[X]) -> Unit
+pub fn[X] WebView::forward(Self[X]) -> Unit
 pub fn[X] WebView::get_handle(Self[X]) -> WebView_t
+pub fn[X] WebView::go(Self[X], Int) -> Unit
 pub fn[X] WebView::navigate(Self[X], String) -> Unit
+pub fn[X] WebView::reload(Self[X]) -> Unit
+pub fn[X] WebView::reload_force(Self[X]) -> Unit
+pub fn[X] WebView::set_html(Self[X], String) -> Unit
 pub fn[X] WebView::set_size(Self[X], Int, Int, SizeHint) -> Unit
 pub fn[X] WebView::set_title(Self[X], String) -> Unit
 pub fn[X] WebView::terminate(Self[X]) -> Unit
@@ -215,16 +222,23 @@ pub type WebView_t
 
 pub struct Window {
   title : String
-  url : String
   width : Int
   height : Int
   debug : Int
   child_arg : String
+  mut url : String
   mut html : String
+  startup_history_ops : Array[String]
   plugins : Array[Plugin]
 }
+pub fn Window::back(Self) -> Unit
+pub fn Window::forward(Self) -> Unit
+pub fn Window::go(Self, Int) -> Unit
 pub fn Window::install(Self, Plugin) -> Unit
+pub fn Window::navigate(Self, String) -> Unit
 pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, debug? : Int, child_arg? : String) -> Self
+pub fn Window::reload(Self) -> Unit
+pub fn Window::reload_force(Self) -> Unit
 pub fn Window::run(Self) -> Unit
 pub fn Window::set_html(Self, String) -> Unit
 
