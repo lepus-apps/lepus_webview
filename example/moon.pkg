@@ -1,5 +1,6 @@
 import {
   "lepus-apps/webview",
+  "moonbitlang/async",
   "moonbitlang/core/json",
 }
 
@@ -9,7 +10,7 @@ options(
   is_main: true,
   link: {
     "native": {
-      // MacOS / Linux
+      // MacOS / Linux: use pre-built webview shared library
       "cc-link-flags": "-Llib -lwebview -Wl,-rpath,lib",
       // Windows
       // "cc-link-flags": "lib/webview.lib",
