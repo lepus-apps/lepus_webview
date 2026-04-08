@@ -339,9 +339,35 @@ pub fn[X] WebView::minimize(self : WebView[X]) -> Unit {
 }
 
 ///|
+/// Maximize native window.
+pub fn[X] WebView::maximize(self : WebView[X]) -> Unit {
+  ignore(wm_maximize_window(self.window_id))
+}
+
+///|
+/// Restore native window from maximized state.
+pub fn[X] WebView::unmaximize(self : WebView[X]) -> Unit {
+  ignore(wm_unmaximize_window(self.window_id))
+}
+
+///|
 /// Toggle native maximize state.
 pub fn[X] WebView::toggle_maximize(self : WebView[X]) -> Unit {
   ignore(wm_toggle_maximize_window(self.window_id))
+}
+
+///|
+/// Set native fullscreen state.
+pub fn[X] WebView::set_fullscreen(self : WebView[X], fullscreen : Bool) -> Unit {
+  ignore(
+    wm_set_fullscreen_window(self.window_id, if fullscreen { 1 } else { 0 }),
+  )
+}
+
+///|
+/// Toggle native fullscreen state.
+pub fn[X] WebView::toggle_fullscreen(self : WebView[X]) -> Unit {
+  ignore(wm_toggle_fullscreen_window(self.window_id))
 }
 
 ///|

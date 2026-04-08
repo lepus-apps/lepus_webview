@@ -217,12 +217,49 @@ pub fn WindowManager::minimize_window(
 }
 
 ///|
+/// Maximize native window.
+pub fn WindowManager::maximize_window(
+  _self : WindowManager,
+  window_id : Int,
+) -> Int {
+  wm_maximize_window(window_id)
+}
+
+///|
+/// Restore native window from maximized state.
+pub fn WindowManager::unmaximize_window(
+  _self : WindowManager,
+  window_id : Int,
+) -> Int {
+  wm_unmaximize_window(window_id)
+}
+
+///|
 /// Toggle native maximize state.
 pub fn WindowManager::toggle_maximize_window(
   _self : WindowManager,
   window_id : Int,
 ) -> Int {
   wm_toggle_maximize_window(window_id)
+}
+
+///|
+/// Set native fullscreen state.
+pub fn WindowManager::set_fullscreen_window(
+  _self : WindowManager,
+  window_id : Int,
+  fullscreen : Bool,
+) -> Int {
+  wm_set_fullscreen_window(window_id, if fullscreen { 1 } else { 0 })
+}
+
+///|
+/// Toggle native fullscreen state.
+pub fn WindowManager::toggle_fullscreen_window(
+  _self : WindowManager,
+  window_id : Int,
+) -> Int {
+  wm_toggle_fullscreen_window(window_id)
 }
 
 ///|
