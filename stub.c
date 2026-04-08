@@ -2,6 +2,240 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
+#include <time.h>
+#include <limits.h>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <process.h>
+
+typedef DWORD pid_t;
+typedef SOCKET socket_handle_t;
+typedef HANDLE pthread_t;
+typedef SRWLOCK pthread_mutex_t;
+typedef CONDITION_VARIABLE pthread_cond_t;
+
+#define PTHREAD_MUTEX_INITIALIZER SRWLOCK_INIT
+#define PTHREAD_COND_INITIALIZER CONDITION_VARIABLE_INIT
+#define IPC_INVALID_SOCKET INVALID_SOCKET
+#define UNUSED_ATTR
+#define THREAD_LOCAL __declspec(thread)
+#define CLOCK_REALTIME 0
+
+struct timespec
+{
+    time_t tv_sec;
+    long tv_nsec;
+};
+
+typedef struct
+{
+    void *(*start_routine)(void *);
+    void *arg;
+} moonbit_thread_start_ctx_t;
+
+static unsigned __stdcall moonbit_thread_start(void *arg)
+{
+    moonbit_thread_start_ctx_t *ctx = (moonbit_thread_start_ctx_t *)arg;
+    void *(*start_routine)(void *) = ctx->start_routine;
+    void *start_arg = ctx->arg;
+    free(ctx);
+    start_routine(start_arg);
+    return 0;
+}
+
+static int pthread_create(
+    pthread_t *thread,
+    void *unused_attr,
+    void *(*start_routine)(void *),
+    void *arg)
+{
+    (void)unused_attr;
+    moonbit_thread_start_ctx_t *ctx =
+        (moonbit_thread_start_ctx_t *)malloc(sizeof(moonbit_thread_start_ctx_t));
+    if (!ctx)
+        return ENOMEM;
+    ctx->start_routine = start_routine;
+    ctx->arg = arg;
+
+    uintptr_t handle = _beginthreadex(NULL, 0, moonbit_thread_start, ctx, 0, NULL);
+    if (handle == 0)
+    {
+        int err = errno ? errno : EAGAIN;
+        free(ctx);
+        return err;
+    }
+    *thread = (HANDLE)handle;
+    return 0;
+}
+
+static int pthread_join(pthread_t thread, void **retval)
+{
+    (void)retval;
+    DWORD rc = WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    return rc == WAIT_OBJECT_0 ? 0 : EINVAL;
+}
+
+static int pthread_detach(pthread_t thread)
+{
+    return CloseHandle(thread) ? 0 : EINVAL;
+}
+
+static int pthread_mutex_init(pthread_mutex_t *mutex, void *unused_attr)
+{
+    (void)unused_attr;
+    InitializeSRWLock(mutex);
+    return 0;
+}
+
+static int pthread_mutex_lock(pthread_mutex_t *mutex)
+{
+    AcquireSRWLockExclusive(mutex);
+    return 0;
+}
+
+static int pthread_mutex_unlock(pthread_mutex_t *mutex)
+{
+    ReleaseSRWLockExclusive(mutex);
+    return 0;
+}
+
+static int pthread_cond_init(pthread_cond_t *cond, void *unused_attr)
+{
+    (void)unused_attr;
+    InitializeConditionVariable(cond);
+    return 0;
+}
+
+static int pthread_cond_signal(pthread_cond_t *cond)
+{
+    WakeConditionVariable(cond);
+    return 0;
+}
+
+static int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
+{
+    return SleepConditionVariableSRW(cond, mutex, INFINITE, 0) ? 0 : EINVAL;
+}
+
+static int pthread_cond_timedwait(
+    pthread_cond_t *cond,
+    pthread_mutex_t *mutex,
+    const struct timespec *abstime)
+{
+    FILETIME ft_now;
+    ULARGE_INTEGER now;
+    GetSystemTimeAsFileTime(&ft_now);
+    now.LowPart = ft_now.dwLowDateTime;
+    now.HighPart = ft_now.dwHighDateTime;
+
+    uint64_t now_ns = (now.QuadPart - 116444736000000000ULL) * 100ULL;
+    uint64_t target_ns =
+        (uint64_t)abstime->tv_sec * 1000000000ULL + (uint64_t)abstime->tv_nsec;
+    DWORD timeout_ms = 0;
+    if (target_ns > now_ns)
+    {
+        uint64_t delta_ns = target_ns - now_ns;
+        timeout_ms = (DWORD)((delta_ns + 999999ULL) / 1000000ULL);
+    }
+
+    if (SleepConditionVariableSRW(cond, mutex, timeout_ms, 0))
+        return 0;
+    return GetLastError() == ERROR_TIMEOUT ? ETIMEDOUT : EINVAL;
+}
+
+static int clock_gettime(int clk_id, struct timespec *ts)
+{
+    (void)clk_id;
+    FILETIME ft_now;
+    ULARGE_INTEGER now;
+    GetSystemTimeAsFileTime(&ft_now);
+    now.LowPart = ft_now.dwLowDateTime;
+    now.HighPart = ft_now.dwHighDateTime;
+    uint64_t ns = (now.QuadPart - 116444736000000000ULL) * 100ULL;
+    ts->tv_sec = (time_t)(ns / 1000000000ULL);
+    ts->tv_nsec = (long)(ns % 1000000000ULL);
+    return 0;
+}
+
+static int nanosleep(const struct timespec *req, struct timespec *rem)
+{
+    (void)rem;
+    DWORD ms = (DWORD)(req->tv_sec * 1000 + req->tv_nsec / 1000000L);
+    if (ms == 0 && (req->tv_sec > 0 || req->tv_nsec > 0))
+        ms = 1;
+    Sleep(ms);
+    return 0;
+}
+
+static int get_errno_code(void)
+{
+    int err = WSAGetLastError();
+    switch (err)
+    {
+    case WSAEINTR:
+        return EINTR;
+    case WSAEWOULDBLOCK:
+        return EWOULDBLOCK;
+    case WSAEAGAIN:
+        return EAGAIN;
+    default:
+        return err;
+    }
+}
+
+static int socket_last_error(void)
+{
+    return get_errno_code();
+}
+
+static int socket_would_block(int err)
+{
+    return err == EAGAIN || err == EWOULDBLOCK;
+}
+
+static int socket_interrupted(int err)
+{
+    return err == EINTR;
+}
+
+static void socket_close(socket_handle_t fd)
+{
+    if (fd != IPC_INVALID_SOCKET)
+        closesocket(fd);
+}
+
+static void set_nonblocking(socket_handle_t fd)
+{
+    u_long mode = 1;
+    ioctlsocket(fd, FIONBIO, &mode);
+}
+
+static int winsock_init(void)
+{
+    static int initialized = 0;
+    static pthread_mutex_t init_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&init_mutex);
+    if (!initialized)
+    {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+        {
+            pthread_mutex_unlock(&init_mutex);
+            return -1;
+        }
+        initialized = 1;
+    }
+    pthread_mutex_unlock(&init_mutex);
+    return 0;
+}
+
+#else
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -9,11 +243,49 @@
 #include <sys/un.h>
 #include <sys/select.h>
 #include <pthread.h>
-#include <errno.h>
 #include <signal.h>
 #include <fcntl.h>
-#include <time.h>
 #include <spawn.h>
+
+typedef int socket_handle_t;
+
+#define IPC_INVALID_SOCKET (-1)
+#define UNUSED_ATTR __attribute__((unused))
+#define THREAD_LOCAL __thread
+
+static int socket_last_error(void)
+{
+    return errno;
+}
+
+static int socket_would_block(int err)
+{
+    return err == EAGAIN || err == EWOULDBLOCK;
+}
+
+static int socket_interrupted(int err)
+{
+    return err == EINTR;
+}
+
+static void socket_close(socket_handle_t fd)
+{
+    if (fd != IPC_INVALID_SOCKET)
+        close(fd);
+}
+
+static void set_nonblocking(socket_handle_t fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0)
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static int winsock_init(void)
+{
+    return 0;
+}
+#endif
 
 /* ── webview 前向声明 ─────────────────────────────────────────── */
 typedef void *webview_t;
@@ -34,7 +306,9 @@ extern void webview_return(webview_t w, const char *seq, int status, const char 
 extern void webview_set_html(webview_t w, const char *html);
 extern int64_t webview_get_window(webview_t w);
 extern int64_t webview_get_native_handle(webview_t w, int kind);
+#ifndef _WIN32
 extern char **environ;
+#endif
 
 /* moonbit 运行时接口 */
 #include "moonbit.h"
@@ -91,7 +365,12 @@ typedef enum
 #define IPC_MAGIC 0x4D425657u    /* "MBVW" */
 #define IPC_MAX_DATA (64 * 1024) /* 每条消息最大 64 KB 数据 */
 #define IPC_SUBTYPE_LEN 64
+#ifdef _WIN32
+#define IPC_SOCKET_PATH "tcp://127.0.0.1"
+#define IPC_ENDPOINT_ENV "MOONBIT_WEBVIEW_IPC_PORT"
+#else
 #define IPC_SOCKET_PATH "/tmp/moonbit_webview_ipc.sock"
+#endif
 #define IPC_LISTEN_BACKLOG 16
 
 /* ── IPC 消息结构 ─────────────────────────────────────────────── */
@@ -140,7 +419,7 @@ typedef struct webview_window
     int32_t visible;
     int32_t is_child_process;
     int32_t parent_window_id;
-    int32_t ipc_client_fd; /* 主进程侧：已接受的客户连接 fd */
+    socket_handle_t ipc_client_fd; /* 主进程侧：已接受的客户连接 fd */
     ipc_conn_state_t ipc_state;
     void *user_data;
     /* 事件回调（可为 NULL） */
@@ -159,7 +438,7 @@ typedef struct
     int32_t next_window_id;
     pthread_mutex_t mutex;
     /* IPC 服务器（主进程） */
-    int ipc_socket;
+    socket_handle_t ipc_socket;
     char ipc_socket_path[256];
     int ipc_server_running;
     pthread_t ipc_thread;
@@ -187,7 +466,7 @@ static window_manager_t g_wm = {
     .window_count = 0,
     .next_window_id = 1,
     .mutex = PTHREAD_MUTEX_INITIALIZER,
-    .ipc_socket = -1,
+    .ipc_socket = IPC_INVALID_SOCKET,
     .ipc_socket_path = IPC_SOCKET_PATH,
     .ipc_server_running = 0,
     .ipc_thread = 0,
@@ -208,7 +487,7 @@ static window_manager_t g_wm = {
 
 typedef struct
 {
-    int socket_fd;
+    socket_handle_t socket_fd;
     int32_t window_id;
     int connected;
     pthread_t listener_thread;
@@ -217,14 +496,14 @@ typedef struct
 } ipc_client_t;
 
 static ipc_client_t g_ipc_client = {
-    .socket_fd = -1,
+    .socket_fd = IPC_INVALID_SOCKET,
     .window_id = -1,
     .connected = 0,
     .listener_thread = 0,
     .message_seq = 0,
     .state = IPC_CONN_DISCONNECTED};
 
-static int *g_remote_window_fds = NULL;
+static socket_handle_t *g_remote_window_fds = NULL;
 static int g_remote_window_fds_capacity = 0;
 
 static void ensure_remote_window_fds_capacity_locked(int window_id)
@@ -236,16 +515,17 @@ static void ensure_remote_window_fds_capacity_locked(int window_id)
     int new_cap = g_remote_window_fds_capacity == 0 ? 32 : g_remote_window_fds_capacity * 2;
     while (new_cap <= window_id)
         new_cap *= 2;
-    int *new_fds = (int *)realloc(g_remote_window_fds, (size_t)new_cap * sizeof(int));
+    socket_handle_t *new_fds =
+        (socket_handle_t *)realloc(g_remote_window_fds, (size_t)new_cap * sizeof(socket_handle_t));
     if (!new_fds)
         return;
     for (int i = g_remote_window_fds_capacity; i < new_cap; i++)
-        new_fds[i] = -1;
+        new_fds[i] = IPC_INVALID_SOCKET;
     g_remote_window_fds = new_fds;
     g_remote_window_fds_capacity = new_cap;
 }
 
-static void set_remote_window_fd(int window_id, int fd)
+static void set_remote_window_fd(int window_id, socket_handle_t fd)
 {
     pthread_mutex_lock(&g_wm.mutex);
     ensure_remote_window_fds_capacity_locked(window_id);
@@ -254,10 +534,11 @@ static void set_remote_window_fd(int window_id, int fd)
     pthread_mutex_unlock(&g_wm.mutex);
 }
 
-static int get_remote_window_fd(int window_id)
+static socket_handle_t get_remote_window_fd(int window_id)
 {
     pthread_mutex_lock(&g_wm.mutex);
-    int fd = (window_id >= 0 && window_id < g_remote_window_fds_capacity) ? g_remote_window_fds[window_id] : -1;
+    socket_handle_t fd =
+        (window_id >= 0 && window_id < g_remote_window_fds_capacity) ? g_remote_window_fds[window_id] : IPC_INVALID_SOCKET;
     pthread_mutex_unlock(&g_wm.mutex);
     return fd;
 }
@@ -266,7 +547,7 @@ static void clear_remote_window_fd(int window_id)
 {
     pthread_mutex_lock(&g_wm.mutex);
     if (window_id >= 0 && window_id < g_remote_window_fds_capacity)
-        g_remote_window_fds[window_id] = -1;
+        g_remote_window_fds[window_id] = IPC_INVALID_SOCKET;
     pthread_mutex_unlock(&g_wm.mutex);
 }
 
@@ -275,6 +556,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_dispatch(
     int window_id,
     void (*fn)(webview_t, void *),
     void *arg);
+MOONBIT_FFI_EXPORT int moonbit_wm_get_process_id(void);
 static void ipc_recv_callback(ipc_message_t *msg);
 
 /* ════════════════════════════════════════════════════════════════
@@ -354,7 +636,7 @@ static webview_window_t *find_window(int32_t id)
 }
 
 /* 通过进程 PID 查找窗口节点 */
-__attribute__((unused)) static webview_window_t *find_window_by_pid(pid_t pid)
+UNUSED_ATTR static webview_window_t *find_window_by_pid(pid_t pid)
 {
     webview_window_t *w = g_wm.head;
     while (w)
@@ -440,31 +722,24 @@ static void ipc_message_free(ipc_message_t *msg)
     }
 }
 
-/* 设置 fd 为非阻塞模式 */
-static void set_nonblocking(int fd)
-{
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0)
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-}
-
 /* ════════════════════════════════════════════════════════════════
    IPC 低层 I/O：带重试的全量读/写
    ════════════════════════════════════════════════════════════════ */
 
 /* 向 fd 写入 len 字节，自动处理 EINTR/EAGAIN；失败返回 -1 */
-static int write_all(int fd, const void *buf, int len)
+static int write_all(socket_handle_t fd, const void *buf, int len)
 {
     const char *p = (const char *)buf;
     int remaining = len;
     while (remaining > 0)
     {
-        int n = (int)send(fd, p, remaining, MSG_NOSIGNAL);
+        int n = (int)send(fd, p, remaining, 0);
         if (n < 0)
         {
-            if (errno == EINTR)
+            int err = socket_last_error();
+            if (socket_interrupted(err))
                 continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            if (socket_would_block(err))
             {
                 /* 轮询等待 1ms */
                 struct timespec ts = {0, 1000000};
@@ -480,7 +755,7 @@ static int write_all(int fd, const void *buf, int len)
 }
 
 /* 从 fd 精确读取 len 字节，自动处理 EINTR；连接关闭或错误返回 -1 */
-static int read_exact(int fd, void *buf, int len)
+static int read_exact(socket_handle_t fd, void *buf, int len)
 {
     char *p = (char *)buf;
     int remaining = len;
@@ -489,9 +764,10 @@ static int read_exact(int fd, void *buf, int len)
         int n = (int)recv(fd, p, remaining, 0);
         if (n < 0)
         {
-            if (errno == EINTR)
+            int err = socket_last_error();
+            if (socket_interrupted(err))
                 continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            if (socket_would_block(err))
             {
                 struct timespec ts = {0, 1000000};
                 nanosleep(&ts, NULL);
@@ -512,7 +788,7 @@ static int read_exact(int fd, void *buf, int len)
    ════════════════════════════════════════════════════════════════ */
 
 /* 将 ipc_message_t 序列化为帧并写入 fd；成功返回 0 */
-static int ipc_send(int fd, const ipc_message_t *msg)
+static int ipc_send(socket_handle_t fd, const ipc_message_t *msg)
 {
     int32_t data_len = msg->data ? msg->data_length : 0;
     ipc_frame_hdr_t hdr;
@@ -534,7 +810,7 @@ static int ipc_send(int fd, const ipc_message_t *msg)
 }
 
 /* 从 fd 读取一条消息并填充 *out（data 字段堆分配，调用方负责释放）；失败返回 -1 */
-static int ipc_recv(int fd, ipc_message_t *out)
+static int ipc_recv(socket_handle_t fd, ipc_message_t *out)
 {
     ipc_frame_hdr_t hdr;
     if (read_exact(fd, &hdr, sizeof(hdr)) < 0)
@@ -583,7 +859,7 @@ static int ipc_recv(int fd, ipc_message_t *out)
 /* 每个客户端连接的上下文 */
 typedef struct
 {
-    int client_fd;
+    socket_handle_t client_fd;
     int32_t remote_window_id; /* 握手后从第一条消息获取 */
     pthread_t thread;
 } ipc_conn_ctx_t;
@@ -593,12 +869,13 @@ static void route_message(ipc_message_t *msg)
 {
     pthread_mutex_lock(&g_wm.mutex);
     webview_window_t *target = find_window(msg->target_window_id);
-    int target_fd = (target && target->ipc_client_fd >= 0) ? target->ipc_client_fd : -1;
-    if (target_fd < 0 && msg->target_window_id >= 0 && msg->target_window_id < g_remote_window_fds_capacity)
+    socket_handle_t target_fd =
+        (target && target->ipc_client_fd != IPC_INVALID_SOCKET) ? target->ipc_client_fd : IPC_INVALID_SOCKET;
+    if (target_fd == IPC_INVALID_SOCKET && msg->target_window_id >= 0 && msg->target_window_id < g_remote_window_fds_capacity)
         target_fd = g_remote_window_fds[msg->target_window_id];
     pthread_mutex_unlock(&g_wm.mutex);
 
-    if (target_fd >= 0)
+    if (target_fd != IPC_INVALID_SOCKET)
     {
         ipc_send(target_fd, msg);
     }
@@ -664,13 +941,13 @@ static void *ipc_conn_handler(void *arg)
     webview_window_t *w = find_window(ctx->remote_window_id);
     if (w)
     {
-        w->ipc_client_fd = -1;
+        w->ipc_client_fd = IPC_INVALID_SOCKET;
         w->ipc_state = IPC_CONN_DISCONNECTED;
     }
     pthread_mutex_unlock(&g_wm.mutex);
     clear_remote_window_fd(ctx->remote_window_id);
 
-    close(ctx->client_fd);
+    socket_close(ctx->client_fd);
     free(ctx);
     return NULL;
 }
@@ -688,7 +965,7 @@ static void *ipc_server_thread(void *arg)
         int ret = select(g_wm.ipc_socket + 1, &rfds, NULL, NULL, &tv);
         if (ret < 0)
         {
-            if (errno == EINTR)
+            if (socket_interrupted(socket_last_error()))
                 continue;
             perror("[IPC] select");
             break;
@@ -696,10 +973,11 @@ static void *ipc_server_thread(void *arg)
         if (ret == 0)
             continue;
 
-        int client_fd = accept(g_wm.ipc_socket, NULL, NULL);
-        if (client_fd < 0)
+        socket_handle_t client_fd = accept(g_wm.ipc_socket, NULL, NULL);
+        if (client_fd == IPC_INVALID_SOCKET)
         {
-            if (errno == EINTR || errno == EAGAIN)
+            int err = socket_last_error();
+            if (socket_interrupted(err) || socket_would_block(err))
                 continue;
             perror("[IPC] accept");
             continue;
@@ -758,13 +1036,63 @@ static void *ipc_client_listener(void *arg)
    IPC socket 工厂
    ════════════════════════════════════════════════════════════════ */
 
-static int create_ipc_server_socket(void)
+static socket_handle_t create_ipc_server_socket(void)
 {
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (winsock_init() != 0)
+    {
+        return IPC_INVALID_SOCKET;
+    }
+#ifdef _WIN32
+    socket_handle_t sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == IPC_INVALID_SOCKET)
+    {
+        perror("[IPC] socket");
+        return IPC_INVALID_SOCKET;
+    }
+
+    set_nonblocking(sock);
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(0);
+
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+    {
+        perror("[IPC] bind");
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
+    }
+
+    int addr_len = (int)sizeof(addr);
+    if (getsockname(sock, (struct sockaddr *)&addr, &addr_len) != 0)
+    {
+        perror("[IPC] getsockname");
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
+    }
+
+    if (listen(sock, IPC_LISTEN_BACKLOG) != 0)
+    {
+        perror("[IPC] listen");
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
+    }
+
+    _snprintf(g_wm.ipc_socket_path, sizeof(g_wm.ipc_socket_path),
+              "%s:%u", IPC_SOCKET_PATH, (unsigned)ntohs(addr.sin_port));
+    {
+        char port_buf[16];
+        _snprintf(port_buf, sizeof(port_buf), "%u", (unsigned)ntohs(addr.sin_port));
+        SetEnvironmentVariableA(IPC_ENDPOINT_ENV, port_buf);
+    }
+#else
+    socket_handle_t sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock < 0)
     {
         perror("[IPC] socket");
-        return -1;
+        return IPC_INVALID_SOCKET;
     }
     set_nonblocking(sock);
 
@@ -777,46 +1105,72 @@ static int create_ipc_server_socket(void)
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
         perror("[IPC] bind");
-        close(sock);
-        return -1;
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
     }
     if (listen(sock, IPC_LISTEN_BACKLOG) < 0)
     {
         perror("[IPC] listen");
-        close(sock);
-        return -1;
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
     }
+#endif
     g_wm.ipc_socket = sock;
     return sock;
 }
 
-static int connect_to_ipc_server(void)
+static socket_handle_t connect_to_ipc_server(void)
 {
     /* 子进程启动时主进程可能还未就绪，最多重试 10 次 */
     for (int attempt = 0; attempt < 10; attempt++)
     {
-        int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+#ifdef _WIN32
+        if (winsock_init() != 0)
+            return IPC_INVALID_SOCKET;
+        socket_handle_t sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock == IPC_INVALID_SOCKET)
+        {
+            perror("[IPC] socket");
+            return IPC_INVALID_SOCKET;
+        }
+
+        const char *port_str = getenv(IPC_ENDPOINT_ENV);
+        if (!port_str || !port_str[0])
+        {
+            socket_close(sock);
+            fprintf(stderr, "[IPC] missing %s\n", IPC_ENDPOINT_ENV);
+            return IPC_INVALID_SOCKET;
+        }
+
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons((unsigned short)atoi(port_str));
+#else
+        socket_handle_t sock = socket(AF_UNIX, SOCK_STREAM, 0);
         if (sock < 0)
         {
             perror("[IPC] socket");
-            return -1;
+            return IPC_INVALID_SOCKET;
         }
 
         struct sockaddr_un addr;
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
         strncpy(addr.sun_path, g_wm.ipc_socket_path, sizeof(addr.sun_path) - 1);
+#endif
 
         if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0)
         {
             return sock; /* 成功 */
         }
-        close(sock);
+        socket_close(sock);
         struct timespec ts = {0, 50000000}; /* 50ms */
         nanosleep(&ts, NULL);
     }
     fprintf(stderr, "[IPC] connect failed after retries\n");
-    return -1;
+    return IPC_INVALID_SOCKET;
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -834,11 +1188,11 @@ MOONBIT_FFI_EXPORT int moonbit_wm_init(int is_main_process)
         return 0;
 
     g_wm.process_type = is_main_process ? PROCESS_TYPE_MAIN : PROCESS_TYPE_CHILD;
-    g_wm.main_process_id = getpid();
+    g_wm.main_process_id = (pid_t)moonbit_wm_get_process_id();
 
     if (is_main_process)
     {
-        if (create_ipc_server_socket() < 0)
+        if (create_ipc_server_socket() == IPC_INVALID_SOCKET)
             return -1;
         g_wm.ipc_server_running = 1;
         pthread_create(&g_wm.ipc_thread, NULL, ipc_server_thread, NULL);
@@ -880,9 +1234,13 @@ MOONBIT_FFI_EXPORT void moonbit_wm_cleanup(void)
     {
         g_wm.ipc_server_running = 0;
         pthread_join(g_wm.ipc_thread, NULL);
-        close(g_wm.ipc_socket);
+        socket_close(g_wm.ipc_socket);
+#ifndef _WIN32
         unlink(g_wm.ipc_socket_path);
-        g_wm.ipc_socket = -1;
+#else
+        SetEnvironmentVariableA(IPC_ENDPOINT_ENV, NULL);
+#endif
+        g_wm.ipc_socket = IPC_INVALID_SOCKET;
     }
 
     /* 关闭子进程 IPC 客户端 */
@@ -890,8 +1248,8 @@ MOONBIT_FFI_EXPORT void moonbit_wm_cleanup(void)
     {
         g_ipc_client.connected = 0;
         pthread_join(g_ipc_client.listener_thread, NULL);
-        close(g_ipc_client.socket_fd);
-        g_ipc_client.socket_fd = -1;
+        socket_close(g_ipc_client.socket_fd);
+        g_ipc_client.socket_fd = IPC_INVALID_SOCKET;
         g_ipc_client.state = IPC_CONN_DISCONNECTED;
     }
 
@@ -923,13 +1281,13 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_window(
         return -1;
 
     w->window_id = alloc_window_id();
-    w->process_id = getpid();
+    w->process_id = (pid_t)moonbit_wm_get_process_id();
     w->process_type = g_wm.process_type;
     w->state = WINDOW_STATE_CREATED;
     w->parent_window_id = parent_window_id;
     w->is_child_process = (g_wm.process_type == PROCESS_TYPE_CHILD) ? 1 : 0;
     w->visible = 1;
-    w->ipc_client_fd = -1;
+    w->ipc_client_fd = IPC_INVALID_SOCKET;
     w->ipc_state = IPC_CONN_DISCONNECTED;
     w->width = width > 0 ? width : 800;
     w->height = height > 0 ? height : 600;
@@ -982,10 +1340,10 @@ MOONBIT_FFI_EXPORT int moonbit_wm_destroy_window(int window_id)
         webview_destroy(w->handle);
         w->handle = NULL;
     }
-    if (w->ipc_client_fd >= 0)
+    if (w->ipc_client_fd != IPC_INVALID_SOCKET)
     {
-        close(w->ipc_client_fd);
-        w->ipc_client_fd = -1;
+        socket_close(w->ipc_client_fd);
+        w->ipc_client_fd = IPC_INVALID_SOCKET;
     }
 
     w->state = WINDOW_STATE_CLOSED;
@@ -1305,6 +1663,15 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_child_window(
     int width, int height,
     int parent_window_id)
 {
+#ifdef _WIN32
+    (void)title;
+    (void)url;
+    (void)width;
+    (void)height;
+    (void)parent_window_id;
+    fprintf(stderr, "[WM] moonbit_wm_create_child_window is not supported on WIN32; use spawn/connect flow instead\n");
+    return -1;
+#else
     pid_t pid = fork();
     if (pid < 0)
     {
@@ -1324,8 +1691,8 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_child_window(
         g_ipc_client.connected = 0;
 
         /* 连接到父进程 IPC 服务器 */
-        int sock = connect_to_ipc_server();
-        if (sock < 0)
+        socket_handle_t sock = connect_to_ipc_server();
+        if (sock == IPC_INVALID_SOCKET)
         {
             fprintf(stderr, "[WM-child] IPC connect failed\n");
             exit(1);
@@ -1355,7 +1722,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_child_window(
         char payload[256];
         snprintf(payload, sizeof(payload),
                  "{\"window_id\":%d,\"pid\":%d,\"parent_id\":%d,\"title\":\"%s\"}",
-                 wid, (int)getpid(), parent_window_id, title ? title : "");
+                 wid, moonbit_wm_get_process_id(), parent_window_id, title ? title : "");
 
         ipc_message_t reg = {0};
         reg.source_window_id = wid;
@@ -1378,10 +1745,15 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_child_window(
 
     /* ── 父进程：返回子 PID ─────────────────────────────────────── */
     return (int)pid;
+#endif
 }
 
 MOONBIT_FFI_EXPORT int moonbit_wm_fork_process(void)
 {
+#ifdef _WIN32
+    fprintf(stderr, "[WM] moonbit_wm_fork_process is not supported on WIN32; use moonbit_wm_spawn_process instead\n");
+    return -1;
+#else
     if (!g_wm.initialized)
     {
         if (moonbit_wm_init(1) != 0)
@@ -1406,8 +1778,8 @@ MOONBIT_FFI_EXPORT int moonbit_wm_fork_process(void)
         g_wm.on_ipc_message = NULL;
         g_ipc_client.connected = 0;
 
-        int sock = connect_to_ipc_server();
-        if (sock < 0)
+        socket_handle_t sock = connect_to_ipc_server();
+        if (sock == IPC_INVALID_SOCKET)
         {
             fprintf(stderr, "[WM-child] IPC connect failed\n");
             exit(1);
@@ -1428,6 +1800,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_fork_process(void)
     }
 
     return (int)pid;
+#endif
 }
 
 MOONBIT_FFI_EXPORT int moonbit_wm_spawn_process(
@@ -1437,6 +1810,42 @@ MOONBIT_FFI_EXPORT int moonbit_wm_spawn_process(
     if (!program || !program[0])
         return -1;
 
+#ifdef _WIN32
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char command_line[2048];
+    const char *extra_arg = (arg1 && arg1[0]) ? arg1 : NULL;
+
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+
+    if (extra_arg)
+        _snprintf(command_line, sizeof(command_line), "\"%s\" \"%s\"", program, extra_arg);
+    else
+        _snprintf(command_line, sizeof(command_line), "\"%s\"", program);
+    command_line[sizeof(command_line) - 1] = '\0';
+
+    if (!CreateProcessA(
+            program,
+            command_line,
+            NULL,
+            NULL,
+            TRUE,
+            0,
+            NULL,
+            NULL,
+            &si,
+            &pi))
+    {
+        fprintf(stderr, "[WM] CreateProcess failed: %lu\n", (unsigned long)GetLastError());
+        return -1;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)pi.dwProcessId;
+#else
     pid_t pid = 0;
     char *const argv[] = {
         (char *)program,
@@ -1451,6 +1860,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_spawn_process(
         return -1;
     }
     return (int)pid;
+#endif
 }
 
 MOONBIT_FFI_EXPORT int moonbit_wm_connect_child_process(void)
@@ -1464,8 +1874,8 @@ MOONBIT_FFI_EXPORT int moonbit_wm_connect_child_process(void)
     g_wm.on_ipc_message = NULL;
     g_ipc_client.connected = 0;
 
-    int sock = connect_to_ipc_server();
-    if (sock < 0)
+    socket_handle_t sock = connect_to_ipc_server();
+    if (sock == IPC_INVALID_SOCKET)
     {
         fprintf(stderr, "[WM-child] IPC connect failed\n");
         return -1;
@@ -1485,24 +1895,82 @@ MOONBIT_FFI_EXPORT int moonbit_wm_connect_child_process(void)
 /** 阻塞等待子进程结束；status 接收退出状态（可为 NULL）。 */
 MOONBIT_FFI_EXPORT int moonbit_wm_wait_child(int pid, int *status)
 {
+#ifdef _WIN32
+    HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!process)
+        return -1;
+    DWORD wait_rc = WaitForSingleObject(process, INFINITE);
+    if (wait_rc != WAIT_OBJECT_0)
+    {
+        CloseHandle(process);
+        return -1;
+    }
+    if (status)
+    {
+        DWORD exit_code = 0;
+        if (!GetExitCodeProcess(process, &exit_code))
+            *status = -1;
+        else
+            *status = (int)exit_code;
+    }
+    CloseHandle(process);
+    return pid;
+#else
     return (int)waitpid((pid_t)pid, status, 0);
+#endif
 }
 
 /** 非阻塞检查子进程；尚未结束返回 0，已结束返回 PID，错误返回 -1。 */
 MOONBIT_FFI_EXPORT int moonbit_wm_wait_child_noblock(int pid, int *status)
 {
+#ifdef _WIN32
+    HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!process)
+        return -1;
+    DWORD wait_rc = WaitForSingleObject(process, 0);
+    if (wait_rc == WAIT_TIMEOUT)
+    {
+        CloseHandle(process);
+        return 0;
+    }
+    if (wait_rc != WAIT_OBJECT_0)
+    {
+        CloseHandle(process);
+        return -1;
+    }
+    if (status)
+    {
+        DWORD exit_code = 0;
+        if (!GetExitCodeProcess(process, &exit_code))
+            *status = -1;
+        else
+            *status = (int)exit_code;
+    }
+    CloseHandle(process);
+    return pid;
+#else
     return (int)waitpid((pid_t)pid, status, WNOHANG);
+#endif
 }
 
 MOONBIT_FFI_EXPORT int moonbit_wm_wait_child_noblock_no_status(int pid)
 {
-    return (int)waitpid((pid_t)pid, NULL, WNOHANG);
+    return moonbit_wm_wait_child_noblock(pid, NULL);
 }
 
 /** 向子进程发送 SIGTERM。 */
 MOONBIT_FFI_EXPORT int moonbit_wm_kill_child(int pid)
 {
+#ifdef _WIN32
+    HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+    if (!process)
+        return -1;
+    BOOL ok = TerminateProcess(process, 1);
+    CloseHandle(process);
+    return ok ? 0 : -1;
+#else
     return kill((pid_t)pid, SIGTERM);
+#endif
 }
 
 /** 返回当前进程类型：0 = 主进程，1 = 子进程。 */
@@ -1514,7 +1982,11 @@ MOONBIT_FFI_EXPORT int moonbit_wm_get_process_type(void)
 /** 返回当前进程 PID。 */
 MOONBIT_FFI_EXPORT int moonbit_wm_get_process_id(void)
 {
+#ifdef _WIN32
+    return (int)GetCurrentProcessId();
+#else
     return (int)getpid();
+#endif
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -1561,7 +2033,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_send(
     if (g_wm.process_type == PROCESS_TYPE_CHILD)
     {
         /* 子进程：通过 IPC 客户端发送到主进程 */
-        if (!g_ipc_client.connected || g_ipc_client.socket_fd < 0)
+        if (!g_ipc_client.connected || g_ipc_client.socket_fd == IPC_INVALID_SOCKET)
         {
             rc = -1;
         }
@@ -1580,7 +2052,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_send(
             webview_window_t *w = g_wm.head;
             while (w)
             {
-                if (w->ipc_client_fd >= 0)
+                if (w->ipc_client_fd != IPC_INVALID_SOCKET)
                     ipc_send(w->ipc_client_fd, &msg);
                 w = w->next;
             }
@@ -1590,11 +2062,12 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_send(
         {
             pthread_mutex_lock(&g_wm.mutex);
             webview_window_t *w = find_window(target_window_id);
-            int fd = (w && w->ipc_client_fd >= 0) ? w->ipc_client_fd : -1;
-            if (fd < 0 && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+            socket_handle_t fd =
+                (w && w->ipc_client_fd != IPC_INVALID_SOCKET) ? w->ipc_client_fd : IPC_INVALID_SOCKET;
+            if (fd == IPC_INVALID_SOCKET && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
                 fd = g_remote_window_fds[target_window_id];
             pthread_mutex_unlock(&g_wm.mutex);
-            rc = (fd >= 0) ? ipc_send(fd, &msg) : -1;
+            rc = (fd != IPC_INVALID_SOCKET) ? ipc_send(fd, &msg) : -1;
         }
     }
 
@@ -1644,22 +2117,22 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_request(
     }
 
     /* 确定发送 fd */
-    int fd = -1;
+    socket_handle_t fd = IPC_INVALID_SOCKET;
     if (g_wm.process_type == PROCESS_TYPE_CHILD)
     {
-        fd = g_ipc_client.connected ? g_ipc_client.socket_fd : -1;
+        fd = g_ipc_client.connected ? g_ipc_client.socket_fd : IPC_INVALID_SOCKET;
     }
     else
     {
         pthread_mutex_lock(&g_wm.mutex);
         webview_window_t *w = find_window(target_window_id);
-        fd = (w && w->ipc_client_fd >= 0) ? w->ipc_client_fd : -1;
-        if (fd < 0 && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+        fd = (w && w->ipc_client_fd != IPC_INVALID_SOCKET) ? w->ipc_client_fd : IPC_INVALID_SOCKET;
+        if (fd == IPC_INVALID_SOCKET && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
             fd = g_remote_window_fds[target_window_id];
         pthread_mutex_unlock(&g_wm.mutex);
     }
 
-    if (fd < 0)
+    if (fd == IPC_INVALID_SOCKET)
     {
         free(buf);
         pthread_mutex_unlock(&g_wm.request_mutex);
@@ -1800,7 +2273,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_respond(
     int rc = 0;
     if (g_wm.process_type == PROCESS_TYPE_CHILD)
     {
-        rc = (g_ipc_client.connected && g_ipc_client.socket_fd >= 0)
+        rc = (g_ipc_client.connected && g_ipc_client.socket_fd != IPC_INVALID_SOCKET)
                  ? ipc_send(g_ipc_client.socket_fd, &msg)
                  : -1;
     }
@@ -1808,11 +2281,12 @@ MOONBIT_FFI_EXPORT int moonbit_wm_ipc_respond(
     {
         pthread_mutex_lock(&g_wm.mutex);
         webview_window_t *w = find_window(target_window_id);
-        int fd = (w && w->ipc_client_fd >= 0) ? w->ipc_client_fd : -1;
-        if (fd < 0 && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+        socket_handle_t fd =
+            (w && w->ipc_client_fd != IPC_INVALID_SOCKET) ? w->ipc_client_fd : IPC_INVALID_SOCKET;
+        if (fd == IPC_INVALID_SOCKET && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
             fd = g_remote_window_fds[target_window_id];
         pthread_mutex_unlock(&g_wm.mutex);
-        rc = (fd >= 0) ? ipc_send(fd, &msg) : -1;
+        rc = (fd != IPC_INVALID_SOCKET) ? ipc_send(fd, &msg) : -1;
     }
 
     free(buf);
@@ -2319,7 +2793,7 @@ MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_get_message(
 {
     /* 返回编码为 moonbit_bytes_t：message_type|subtype|null|data */
     /* 这是一个简化实现，返回格式化的字符串 */
-    static __thread char static_buf[8192];
+    static THREAD_LOCAL char static_buf[8192];
     static_buf[0] = '\0';
 
     ipc_recv_queue_t *q = get_recv_queue(window_id);
