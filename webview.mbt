@@ -106,13 +106,13 @@ fn[X] WebView::destroy(self : WebView[X]) -> Unit {
 ///|
 /// Stops the main event loop.
 /// Safe to call from a background thread.
-fn[X] WebView::terminate(self : WebView[X]) -> Unit {
+pub fn[X] WebView::terminate(self : WebView[X]) -> Unit {
   ignore(wm_terminate_window(self.window_id))
 }
 
 ///|
 /// Updates the title of the native window.
-fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
+pub fn[X] WebView::set_title(self : WebView[X], title : String) -> Unit {
   ignore(wm_set_title(self.window_id, @encoding/utf8.encode(title)))
 }
 
@@ -139,13 +139,13 @@ fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
 /// webview.navigate("data:text/html,<h1>Hello</h1>")
 /// webview.terminate()
 /// ```
-fn[X] WebView::navigate(self : WebView[X], url : String) -> Unit {
+pub fn[X] WebView::navigate(self : WebView[X], url : String) -> Unit {
   ignore(wm_navigate(self.window_id, @encoding/utf8.encode(url)))
 }
 
 ///|
 /// Returns the raw `WebView_t` handle.
-fn[X] WebView::get_handle(self : WebView[X]) -> WebView_t {
+pub fn[X] WebView::get_handle(self : WebView[X]) -> WebView_t {
   self.handle
 }
 
@@ -174,7 +174,7 @@ fn[X] WebView::init(self : WebView[X], js : String) -> Unit {
 /// Remarks:
 /// - `SizeHint::Max` is not supported with GTK 4.
 /// - GTK 4 can only set a default size early in the window lifecycle.
-fn[X] WebView::set_size(
+pub fn[X] WebView::set_size(
   self : WebView[X],
   width : Int,
   height : Int,

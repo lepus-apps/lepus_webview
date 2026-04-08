@@ -14,13 +14,11 @@
 /// ```
 ///
 /// `on_install` runs after the plugin has finished registering commands and
-/// JS helpers on the host. `on_destroy` runs when the owning plugin host
-/// is destroyed.
+/// JS helpers on the host.
 struct PluginInternal[X] {
   name : String
   register : (PluginContext[X]) -> Unit
   on_install : (PluginContext[X]) -> Unit
-  on_destroy : (PluginContext[X]) -> Unit
 }
 
 ///|
@@ -29,8 +27,6 @@ struct PluginInternal[X] {
 /// On the JavaScript side this exposes:
 /// - `window[global_name]["@@call"](plugin_name, api_name, payload)`
 /// - `window[global_name][plugin_name][api_name](payload)`
-/// - `window[global_name][plugin_name]["@@on"](listener)`
-/// - `window[global_name][plugin_name]["@@onEvent"](name, listener)`
 struct PluginHost[X] {
   webview : WebView[X]
   bridge : CommandBridge[X]
@@ -47,22 +43,13 @@ struct PluginContext[X] {
 }
 
 ///|
-/// A plugin-scoped event sent from MoonBit to JavaScript.
-pub struct PluginEvent {
-  plugin : String
-  name : String
-  payload : Json
-} derive(ToJson, FromJson, Eq)
-
-///|
 /// Builds a plugin value that can later be installed on a `PluginHost`.
 pub fn[X] PluginInternal::new(
   name : String,
   register : (PluginContext[X]) -> Unit,
   on_install? : (PluginContext[X]) -> Unit = fn(_context) {  },
-  on_destroy? : (PluginContext[X]) -> Unit = fn(_context) {  },
 ) -> PluginInternal[X] {
-  PluginInternal::{ name, register, on_install, on_destroy }
+  PluginInternal::{ name, register, on_install }
 }
 
 ///|
@@ -122,28 +109,6 @@ pub fn[X] PluginHost::global_name(self : PluginHost[X]) -> String {
 /// Returns the underlying command bridge used by the plugin host.
 pub fn[X] PluginHost::command_bridge(self : PluginHost[X]) -> CommandBridge[X] {
   self.bridge
-}
-
-///|
-/// Emits a plugin-scoped event from the main program to JavaScript.
-///
-/// JavaScript receives these events through
-/// `window.MoonBitPlugins[plugin_name]["@@on"](...)` and
-/// `window.MoonBitPlugins[plugin_name]["@@onEvent"](...)`.
-fn[X, Payload : ToJson] PluginHost::emit(
-  self : PluginHost[X],
-  plugin_name : String,
-  event_name : String,
-  payload : Payload,
-) -> Unit {
-  guard self.plugins.get(plugin_name) is Some(_) else {
-    abort("PluginHost::emit: plugin is not installed: " + plugin_name)
-  }
-  self.bridge.send(plugin_event_command_name(), PluginEvent::{
-    plugin: plugin_name,
-    name: event_name,
-    payload: payload.to_json(),
-  })
 }
 
 ///|
@@ -255,11 +220,6 @@ fn plugin_command_name(plugin_name : String, api_name : String) -> String {
 }
 
 ///|
-fn plugin_event_command_name() -> String {
-  "@@plugin:event"
-}
-
-///|
 fn is_disallowed_js_property_name(name : String) -> Bool {
   name is (['@', '@', ..] | "__proto__" | "prototype" | "constructor")
 }
@@ -287,7 +247,7 @@ fn make_plugin_host_script(
   let global_name_js = string_literal(global_name)
   let bridge_global_name_js = string_literal(bridge_global_name)
   (
-    $|!function(){const n=\{global_name_js},e=window[n],t=e&&"object"==typeof e?e:Object.create(null);function r(){const n=window[\{bridge_global_name_js}];return n&&"function"==typeof n.send?n:null}function i(n){return Array.isArray(n["@@listeners"])||(n["@@listeners"]=[]),"function"!=typeof n["@@on"]&&(n["@@on"]=function(e){if(t["@@ensureBridgeListener"](),"function"!=typeof e)throw new TypeError("MoonBit plugin listener must be a function");return n["@@listeners"].push(e),function(){n["@@listeners"]=n["@@listeners"].filter(function(n){return n!==e})}}),"function"!=typeof n["@@onEvent"]&&(n["@@onEvent"]=function(e,t){if("function"!=typeof t)throw new TypeError("MoonBit plugin listener must be a function");return n["@@on"](function(n){n.name===e&&t(n)})}),n}t["@@call"]=function(n,e,i){t["@@ensureBridgeListener"]();const o=r();return o?o.send("plugin:"+JSON.stringify(n)+":"+JSON.stringify(e),i):Promise.reject(new Error("MoonBit command bridge is not available"))},t["@@ensurePlugin"]=function(n){const e=t[n];if(e&&"object"==typeof e)return i(e);const r=Object.create(null);return t[n]=r,i(r)},t["@@emit"]=function(n,e,r){const i={plugin:n,name:e,payload:void 0===r?null:r},o=t["@@ensurePlugin"](n)["@@listeners"].slice();for(const n of o)n(i);return i},t["@@ensureBridgeListener"]=function(){if(t["@@bridgeListenerInstalled"])return!0;const n=r();return!(!n||"function"!=typeof n.onCommand)&&(n.onCommand(function(n){if(!Array.isArray(n)||"@@plugin:event"!==n[0])return;const e=n[1];e&&"object"==typeof e&&t["@@emit"](e.plugin,e.name,e.payload)}),t["@@bridgeListenerInstalled"]=!0,!0)},t["@@defineApi"]=function(n,e,i){const o=t["@@ensurePlugin"](n);return t["@@ensureBridgeListener"](),o[e]=function(n){const e=r();return e?e.send(i,n):Promise.reject(new Error("MoonBit command bridge is not available"))},o[e]},t["@@has"]=function(n,e){const r=t[n];return!(!r||"function"!=typeof r[e])},t["@@ensureBridgeListener"](),window[n]=t}();
+    $|!function(){const n=\{global_name_js},e=window[n],t=e&&"object"==typeof e?e:Object.create(null);function r(){const n=window[\{bridge_global_name_js}];return n&&"function"==typeof n.send?n:null}t["@@call"]=function(n,e,t){const o=r();return o?o.send("plugin:"+JSON.stringify(n)+":"+JSON.stringify(e),t):Promise.reject(new Error("MoonBit command bridge is not available"))},t["@@ensurePlugin"]=function(n){const e=t[n];if(e&&"object"==typeof e)return e;const o=Object.create(null);return t[n]=o,o},t["@@defineApi"]=function(n,e,o){const i=t["@@ensurePlugin"](n);return i[e]=function(n){const e=r();return e?e.send(o,n):Promise.reject(new Error("MoonBit command bridge is not available"))},i[e]},t["@@has"]=function(n,e){const o=t[n];return!(!o||"function"!=typeof o[e])},window[n]=t}();
   )
 }
 

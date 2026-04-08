@@ -57,7 +57,7 @@ fn main {
       #|      document.getElementById("sum-result").textContent = "Calculating..."
       #|      const result = await window.MoonBitPlugins.math.sum_async({ left: 2, right: 3 });
       #|      window.MoonBitPlugins.console.log("[example] sum result: " + JSON.stringify(result));
-      #|      document.getElementById("sum-result").textContent = "Result: " + result.Ok.total;
+      #|      document.getElementById("sum-result").textContent = "Result: " + result.total;
       #|    } catch(e) {
       #|      window.MoonBitPlugins.console.error("[example] sum error: " + e.message);
       #|      document.getElementById("sum-result").textContent = "Error: " + e.message;

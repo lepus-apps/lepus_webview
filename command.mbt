@@ -42,11 +42,8 @@ fn CommandResponse::to_wire(self : CommandResponse) -> Bytes {
 ///
 /// JS API:
 /// - `window[global_name].send(name, payload)` → calls MoonBit command
-/// - `window[global_name].onCommand(listener)` receives MoonBit → JS push events
 struct CommandBridge[X] {
   webview : WebView[X]
-  global_name : String
-  event_name : String
   binding_name : String
   handlers : Map[String, (Json, String, CommandBridge[X]) -> Unit]
 }
@@ -56,17 +53,10 @@ struct CommandBridge[X] {
 fn[X] CommandBridge::new(
   webview : WebView[X],
   global_name? : String = "MoonBitBridge",
-  event_name? : String = "moonbit:command",
   binding_name? : String = "__moonbit_command",
 ) -> CommandBridge[X] {
-  let bridge = CommandBridge::{
-    webview,
-    global_name,
-    event_name,
-    binding_name,
-    handlers: {},
-  }
-  bridge.webview.init(make_bridge_script(global_name, binding_name, event_name))
+  let bridge = CommandBridge::{ webview, binding_name, handlers: {} }
+  bridge.webview.init(make_bridge_script(global_name, binding_name))
   bridge.start_dispatch()
   bridge
 }
@@ -194,7 +184,15 @@ fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_bg(
     }
     ignore(
       run_in_background_thread(fn(task) { task() }, () => {
-        let reply = try? callback(payload)
+        let reply = callback(payload) catch {
+          message => {
+            bridge.send_response(
+              id,
+              CommandResponse::error(message.to_string()),
+            )
+            return
+          }
+        }
         bridge.send_response(id, CommandResponse::ok(reply))
       }),
     )
@@ -216,61 +214,29 @@ fn[X, Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result_asy
       }
     }
     self.webview.task_group.spawn_bg(() => {
-      let reply = try? callback(payload)
+      let reply = callback(payload) catch {
+        message => {
+          bridge.send_response(id, CommandResponse::error(message.to_string()))
+          return
+        }
+      }
       bridge.send_response(id, CommandResponse::ok(reply))
     })
   })
 }
 
-///|
-/// Pushes a fire-and-forget event to JavaScript.
-fn[X, Payload : ToJson] CommandBridge::send(
-  self : CommandBridge[X],
-  name : String,
-  payload : Payload,
-) -> Unit {
-  let script = make_push_script(
-    self.global_name,
-    self.event_name,
-    Json::string(name).stringify(),
-    payload.to_json().stringify(),
-  )
-  self.webview.eval(script)
-}
-
 // ── JS scripts ────────────────────────────────────────────────────────────────
 
 ///|
-fn make_bridge_script(
-  global_name : String,
-  binding_name : String,
-  event_name : String,
-) -> String {
+fn make_bridge_script(global_name : String, binding_name : String) -> String {
   let g = Json::string(global_name).stringify()
   let b = Json::string(binding_name).stringify()
-  let e = Json::string(event_name).stringify()
   //Readable form:
   // window[G] = {
   //   send: (n, p) => window[B](n, p),
-  //   onCommand: listener => { ... event listener ... },
-  //   __dispatch: d => window.dispatchEvent(new CustomEvent(E, {detail:d})),
   // }
   (
-    $|!function(){const G=\{g},B=\{b},E=\{e};window[G]={send:(n,p)=>window[B](n,p??null),onCommand:l=>{const h=e=>l(e.detail);window.addEventListener(E,h);return()=>window.removeEventListener(E,h)},__dispatch:d=>window.dispatchEvent(new CustomEvent(E,{detail:d}))};}();
-  )
-}
-
-///|
-fn make_push_script(
-  global_name : String,
-  event_name : String,
-  name_js : String,
-  payload_js : String,
-) -> String {
-  let g = Json::string(global_name).stringify()
-  let e = Json::string(event_name).stringify()
-  (
-    $|!function(){const d=[\{name_js},\{payload_js}],b=window[\{g}];b?b.__dispatch(d):window.dispatchEvent(new CustomEvent(\{e},{detail:d}));}();
+    $|!function(){const G=\{g},B=\{b};window[G]={send:(n,p)=>window[B](n,p??null)};}();
   )
 }
 

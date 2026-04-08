@@ -56,7 +56,11 @@ pub fn ProcessCommandResponse::error(
 pub fn ProcessCommandResponse::stringify(
   self : ProcessCommandResponse,
 ) -> String {
-  self.to_json().stringify()
+  (
+    match self {
+      Ok(payload) => [1, payload]
+      Error(message) => [0, message]
+    } : Json).stringify()
 }
 
 ///|
@@ -80,10 +84,21 @@ pub fn[Reply : @json.FromJson] decode_process_command_response(
   let json = @json.parse(raw) catch {
     _ => raise ProcessCommandError("Bad bridge response JSON")
   }
-  let response : ProcessCommandResponse = @json.from_json(json) catch {
+  let response = decode_process_command_response_wire(json) catch {
     _ => raise ProcessCommandError("Bad bridge response shape")
   }
   response.decode_reply()
+}
+
+///|
+fn decode_process_command_response_wire(
+  json : Json,
+) -> ProcessCommandResponse raise ProcessCommandError {
+  match json {
+    [1, payload] => Ok(payload)
+    [0, String(message)] => Error(message)
+    _ => raise ProcessCommandError("Bad bridge response shape")
+  }
 }
 
 ///|
@@ -105,6 +120,30 @@ pub struct ProcessCommandRouter {
 pub struct ProcessPluginRouter {
   router : ProcessCommandRouter
   plugin_name : String
+}
+
+///|
+fn[Payload : @json.FromJson] decode_process_command_payload(
+  payload_json : Json,
+) -> Payload raise ProcessCommandError {
+  @json.from_json(payload_json) catch {
+    _ => raise ProcessCommandError("Bad command payload")
+  }
+}
+
+///|
+fn[Payload : @json.FromJson] register_process_command(
+  router : ProcessCommandRouter,
+  name : String,
+  callback : async (Payload) -> ProcessCommandResponse,
+) -> Unit {
+  router.handlers.set(name, payload_json => {
+    let payload : Payload = decode_process_command_payload(payload_json) catch {
+      ProcessCommandError(message) =>
+        return ProcessCommandResponse::error(message)
+    }
+    callback(payload)
+  })
 }
 
 ///|
@@ -223,10 +262,7 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessCommandRouter::handle(
   name : String,
   callback : (Payload) -> Reply,
 ) -> Unit {
-  self.handlers.set(name, payload_json => {
-    let payload : Payload = @json.from_json(payload_json) catch {
-      _ => return ProcessCommandResponse::error("Bad command payload")
-    }
+  register_process_command(self, name, payload => {
     ProcessCommandResponse::ok(callback(payload))
   })
 }
@@ -238,10 +274,7 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessCommandRouter::handle_re
   name : String,
   callback : (Payload) -> Reply raise Error,
 ) -> Unit {
-  self.handlers.set(name, payload_json => {
-    let payload : Payload = @json.from_json(payload_json) catch {
-      _ => return ProcessCommandResponse::error("Bad command payload")
-    }
+  register_process_command(self, name, payload => {
     let reply = callback(payload) catch {
       message => return ProcessCommandResponse::error(message.to_string())
     }
@@ -256,10 +289,7 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessCommandRouter::handle_as
   name : String,
   callback : async (Payload) -> Reply,
 ) -> Unit {
-  self.handlers.set(name, payload_json => {
-    let payload : Payload = @json.from_json(payload_json) catch {
-      _ => return ProcessCommandResponse::error("Bad command payload")
-    }
+  register_process_command(self, name, payload => {
     let reply = callback(payload)
     ProcessCommandResponse::ok(reply)
   })
@@ -272,10 +302,7 @@ pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessCommandRouter::handle_re
   name : String,
   callback : async (Payload) -> Reply raise Error,
 ) -> Unit {
-  self.handlers.set(name, payload_json => {
-    let payload : Payload = @json.from_json(payload_json) catch {
-      _ => return ProcessCommandResponse::error("Bad command payload")
-    }
+  register_process_command(self, name, payload => {
     let reply = callback(payload) catch {
       message => return ProcessCommandResponse::error(message.to_string())
     }
@@ -378,4 +405,31 @@ fn make_process_plugin_command_name(
   api_name : String,
 ) -> String {
   "plugin:\{Json::string(plugin_name).stringify()}:\{Json::string(api_name).stringify()}"
+}
+
+///|
+test "ProcessCommandResponse ok stringifies without enum tag" {
+  let raw = ProcessCommandResponse::ok({ "total": Json::number(5) }).stringify()
+  assert_eq(raw, "[1,{\"total\":5}]")
+}
+
+///|
+test "ProcessCommandResponse error stringifies without enum tag" {
+  let raw = ProcessCommandResponse::error("oops").stringify()
+  assert_eq(raw, "[0,\"oops\"]")
+}
+
+///|
+struct ProcessCommandReplyForTest {
+  total : Int
+} derive(FromJson)
+
+///|
+test "decode_process_command_response supports tagged ok payload" {
+  let reply : ProcessCommandReplyForTest = decode_process_command_response(
+    "[1,{\"total\":5}]",
+  ) catch {
+    ProcessCommandError(message) => abort(message)
+  }
+  assert_eq(reply.total, 5)
 }
