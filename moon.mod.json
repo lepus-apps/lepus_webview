@@ -2,7 +2,8 @@
   "name": "lepus-apps/webview",
   "version": "0.1.1",
   "deps": {
-    "moonbitlang/async": "0.17.0"
+    "moonbitlang/async": "0.17.0",
+    "moonbitlang/x": "0.4.41"
   },
   "readme": "README.mbt.md",
   "repository": "https://github.com/lepus-apps/lepus_webview",

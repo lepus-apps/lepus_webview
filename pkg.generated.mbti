@@ -6,96 +6,264 @@ import {
 }
 
 // Values
-pub fn log(Int, String) -> Unit
+pub fn[Reply : @json.FromJson] decode_process_command_response(String) -> Reply raise ProcessCommandError
 
-pub fn set_log_level(Int) -> Unit
+pub fn wm_cleanup() -> Unit
+
+pub fn wm_connect_child_process() -> Int
+
+pub fn wm_create_child_window(Bytes, Bytes, Int, Int, Int) -> Int
+
+pub fn wm_create_window(Bytes, Bytes, Int, Int, Int, Int, Int, Int, Int) -> Int
+
+pub fn wm_destroy_window(Int) -> Int
+
+pub fn wm_eval_js(Int, Bytes) -> Int
+
+pub fn wm_fork_process() -> Int
+
+pub fn wm_get_handle(Int) -> WebView_t
+
+pub fn wm_get_parent_window_id(Int) -> Int
+
+pub fn wm_get_process_id() -> Int
+
+pub fn wm_get_process_type() -> Int
+
+pub fn wm_get_visibility(Int) -> Int
+
+pub fn wm_get_window_count() -> Int
+
+pub fn wm_get_window_id_at(Int) -> Int
+
+pub fn wm_get_window_state(Int) -> Int
+
+pub fn wm_init(Int) -> Int
+
+pub fn wm_init_js(Int, Bytes) -> Int
+
+pub fn wm_ipc_get_message(Int) -> (Int, Bytes, Bytes)
+
+pub fn wm_ipc_pop_message(Int) -> IpcMessageHandle
+
+pub fn wm_ipc_recv(Int) -> Int
+
+pub fn wm_ipc_request_bytes(Int, Int, Bytes, Bytes, Int) -> Bytes
+
+pub fn wm_ipc_respond(Int, Int, Int, Bytes) -> Int
+
+pub fn wm_ipc_send(Int, Int, Int, Bytes, Bytes) -> Int
+
+pub fn wm_kill_child(Int) -> Int
+
+pub fn wm_navigate(Int, Bytes) -> Int
+
+pub fn wm_return_raw(Int, Bytes, Int, Bytes) -> Int
+
+pub fn wm_run_window(Int) -> Int
+
+pub fn wm_run_window_async(Int) -> Int
+
+pub fn wm_set_html(Int, Bytes) -> Int
+
+pub fn wm_set_size(Int, Int, Int, SizeHint) -> Int
+
+pub fn wm_set_title(Int, Bytes) -> Int
+
+pub fn wm_set_visibility(Int, Int) -> Int
+
+pub fn wm_spawn_process(Bytes, Bytes) -> Int
+
+pub fn wm_terminate_window(Int) -> Int
+
+pub fn wm_wait_child_noblock(Int) -> Int
 
 // Errors
+type ProcessCommandError
 
 // Types and methods
 #external
 pub type BindingHandle
 
-type CommandBridge
-pub fn CommandBridge::destroy(Self) -> Unit
-pub fn CommandBridge::event_name(Self) -> String
-pub fn CommandBridge::global_name(Self) -> String
-pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle(Self, String, (Payload) -> Reply) -> Unit
-pub fn[Payload : @json.FromJson, Reply : ToJson] CommandBridge::handle_result(Self, String, (Payload) -> Reply raise) -> Unit
-pub fn CommandBridge::new(WebView, global_name? : String, binding_name? : String, event_name? : String) -> Self
-pub fn[Payload : ToJson] CommandBridge::send(Self, String, Payload) -> Unit
+type CommandBridge[X]
 
 pub(all) enum CommandResponse {
   Ok(Json)
   Error(String)
-} derive(Eq, Show)
-pub fn CommandResponse::error(String) -> Self
-pub fn CommandResponse::is_ok(Self) -> Bool
-pub fn[Payload : ToJson] CommandResponse::ok(Payload) -> Self
+} derive(Eq)
 
-pub(all) enum NativeHandleKind {
-  Window
-  Widget
-  Browser
-} derive(Show)
+pub struct IpcMessage {
+  source_window_id : Int
+  target_window_id : Int
+  message_type : IpcMessageType
+  message_id : Int
+  subtype : String
+  data : String
+}
 
-type Plugin
-pub fn Plugin::new(String, (PluginContext) -> Unit, on_install? : (PluginContext) -> Unit, on_destroy? : (PluginContext) -> Unit) -> Self
+#external
+pub type IpcMessageHandle
 
-type PluginContext
-pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command(Self, String, (Payload) -> Reply) -> Unit
-pub fn[Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result(Self, String, (Payload) -> Reply raise) -> Unit
-pub fn[Payload : ToJson] PluginContext::emit(Self, String, Payload) -> Unit
-pub fn PluginContext::global_name(Self) -> String
-pub fn PluginContext::install_script(Self, String) -> Unit
-pub fn PluginContext::name(Self) -> String
+pub(all) enum IpcMessageType {
+  Data
+  Command
+  Event
+  Request
+  Response
+} derive(Eq)
+pub fn IpcMessageType::int(Self) -> Int
 
-pub struct PluginEvent {
-  plugin : String
+pub struct ManagedPluginBuilder {
+  plugin_name : String
+  parent_installers : Array[(ProcessPluginRouter) -> Unit]
+  child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
+}
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] ManagedPluginBuilder::command(Self, String, (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] ManagedPluginBuilder::command_async(Self, String, async (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] ManagedPluginBuilder::command_result_async(Self, String, async (Payload) -> Reply) -> Unit
+
+pub struct Plugin {
+  name : String
+  parent_installers : Array[(ProcessPluginRouter) -> Unit]
+  child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
+}
+pub fn Plugin::new(String, (ManagedPluginBuilder) -> Unit) -> Self
+
+type PluginContext[X]
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_async(Self[X], String, async (Payload) -> Reply) -> Unit
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result_async(Self[X], String, async (Payload) -> Reply) -> Unit
+pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_result_bg(Self[X], String, (Payload) -> Reply raise) -> Unit
+pub fn[X] PluginContext::name(Self[X]) -> String
+
+type PluginHost[X]
+pub fn[X] PluginHost::command_bridge(Self[X]) -> CommandBridge[X]
+pub fn[X] PluginHost::destroy(Self[X]) -> Unit
+pub fn[X] PluginHost::global_name(Self[X]) -> String
+pub fn[X] PluginHost::install(Self[X], PluginInternal[X]) -> Unit
+pub fn[X] PluginHost::new(WebView[X], global_name? : String) -> Self[X]
+
+type PluginInternal[X]
+pub fn[X] PluginInternal::new(String, (PluginContext[X]) -> Unit, on_install? : (PluginContext[X]) -> Unit) -> Self[X]
+
+pub struct ProcessCommandProxy {
+  wm : WindowManager
+  source_window_id : Int
+  subtype : String
+}
+pub fn[Payload : ToJson, Reply : @json.FromJson] ProcessCommandProxy::call(Self, String, Payload, target_window_id? : Int, timeout_ms? : Int) -> Reply raise ProcessCommandError
+pub fn[Payload : ToJson, Reply : @json.FromJson] ProcessCommandProxy::call_plugin(Self, String, String, Payload, target_window_id? : Int, timeout_ms? : Int) -> Reply raise ProcessCommandError
+pub fn ProcessCommandProxy::new(WindowManager, Int, subtype? : String) -> Self
+pub fn[Payload : ToJson, Reply : @json.FromJson] ProcessCommandProxy::plugin_handler(Self, String, String, target_window_id? : Int, timeout_ms? : Int) -> (Payload) -> Reply raise
+
+type ProcessCommandReplyForTest derive(@json.FromJson)
+
+pub struct ProcessCommandRequest {
   name : String
   payload : Json
-} derive(Eq, Show, ToJson, @json.FromJson)
+} derive(ToJson, @json.FromJson)
+pub fn[Payload : ToJson] ProcessCommandRequest::new(String, Payload) -> Self
+pub fn ProcessCommandRequest::parse(String) -> Self raise ProcessCommandError
 
-type PluginHost
-pub fn PluginHost::command_bridge(Self) -> CommandBridge
-pub fn PluginHost::destroy(Self) -> Unit
-pub fn[Payload : ToJson] PluginHost::emit(Self, String, String, Payload) -> Unit
-pub fn PluginHost::global_name(Self) -> String
-pub fn PluginHost::install(Self, Plugin) -> Unit
-pub fn PluginHost::new(WebView, global_name? : String, command_global_name? : String, binding_name? : String, event_name? : String) -> Self
-pub fn PluginHost::run(Self) -> Unit
+pub(all) enum ProcessCommandResponse {
+  Ok(Json)
+  Error(String)
+} derive(ToJson, @json.FromJson)
+pub fn[Reply : @json.FromJson] ProcessCommandResponse::decode_reply(Self) -> Reply raise ProcessCommandError
+pub fn ProcessCommandResponse::error(String) -> Self
+pub fn[Payload : ToJson] ProcessCommandResponse::ok(Payload) -> Self
+pub fn ProcessCommandResponse::stringify(Self) -> String
+
+pub struct ProcessCommandRouter {
+  handlers : Map[String, async (Json) -> ProcessCommandResponse]
+}
+pub async fn ProcessCommandRouter::dispatch(Self, ProcessCommandRequest) -> ProcessCommandResponse
+pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessCommandRouter::handle(Self, String, (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessCommandRouter::handle_async(Self, String, async (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessCommandRouter::handle_result(Self, String, (Payload) -> Reply raise) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessCommandRouter::handle_result_async(Self, String, async (Payload) -> Reply) -> Unit
+pub fn ProcessCommandRouter::new() -> Self
+pub fn ProcessCommandRouter::plugin(Self, String, (ProcessPluginRouter) -> Unit) -> Unit
+pub async fn ProcessCommandRouter::serve(Self, WindowManager, Int, subtype? : String) -> Unit
+
+pub struct ProcessPluginRouter {
+  router : ProcessCommandRouter
+  plugin_name : String
+}
+pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessPluginRouter::command(Self, String, (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessPluginRouter::command_async(Self, String, async (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessPluginRouter::command_result(Self, String, (Payload) -> Reply raise) -> Unit
+pub fn[Payload : @json.FromJson, Reply : ToJson] ProcessPluginRouter::command_result_async(Self, String, async (Payload) -> Reply) -> Unit
+
+pub(all) enum ProcessType {
+  Main
+  Child
+  Unknown
+} derive(Eq)
 
 pub(all) enum SizeHint {
   None
   Min
   Max
   Fixed
-} derive(Show)
+}
 
-type WebView
-pub fn WebView::bind(Self, String, (String, String) -> Unit) -> Unit
-pub fn WebView::destroy(Self) -> Unit
-pub fn WebView::dispatch(Self, () -> Unit) -> Unit
-pub fn[Payload : ToJson] WebView::emit_plugin(Self, String, String, Payload) -> Unit
-pub fn WebView::eval(Self, String) -> Unit
-pub fn WebView::get_handle(Self) -> WebView_t
-pub fn WebView::get_native_handle(Self, NativeHandleKind) -> Int64
-pub fn WebView::get_window(Self) -> Int64
-pub fn WebView::init(Self, String) -> Unit
-pub fn WebView::install_plugin(Self, Plugin) -> Unit
-pub fn WebView::navigate(Self, String) -> Unit
-pub fn WebView::new(debug? : Int) -> Self
-pub fn WebView::plugin_host(Self) -> PluginHost
-pub fn WebView::response(Self, String, Int, String) -> Unit
-pub fn WebView::run(Self) -> Unit
-pub fn WebView::set_html(Self, String) -> Unit
-pub fn WebView::set_size(Self, Int, Int, SizeHint) -> Unit
-pub fn WebView::set_title(Self, String) -> Unit
-pub fn WebView::terminate(Self) -> Unit
-pub fn WebView::unbind(Self, String) -> Unit
+type WebView[X]
+pub fn[X] WebView::get_handle(Self[X]) -> WebView_t
+pub fn[X] WebView::navigate(Self[X], String) -> Unit
+pub fn[X] WebView::set_size(Self[X], Int, Int, SizeHint) -> Unit
+pub fn[X] WebView::set_title(Self[X], String) -> Unit
+pub fn[X] WebView::terminate(Self[X]) -> Unit
 
 #external
 pub type WebView_t
+
+pub struct Window {
+  title : String
+  url : String
+  width : Int
+  height : Int
+  debug : Int
+  child_arg : String
+  mut html : String
+  plugins : Array[Plugin]
+}
+pub fn Window::install(Self, Plugin) -> Unit
+pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, debug? : Int, child_arg? : String) -> Self
+pub fn Window::run(Self) -> Unit
+pub fn Window::set_html(Self, String) -> Unit
+
+pub struct WindowManager {
+  process_type : ProcessType
+  mut window_ids : Array[Int]
+}
+pub fn WindowManager::broadcast(Self, Int, String, String) -> Int
+pub fn WindowManager::connect_child_process() -> Int
+pub fn WindowManager::create_child_window(Self, String, String, width? : Int, height? : Int, parent_id? : Int) -> Int
+pub fn WindowManager::create_window(Self, String, String, width? : Int, height? : Int) -> Int
+pub fn WindowManager::destroy(Self) -> Unit
+pub fn WindowManager::destroy_window(Self, Int) -> Int
+pub fn WindowManager::fork_process(Self) -> Int
+pub fn WindowManager::init(is_main? : Bool) -> Self
+pub fn WindowManager::is_child_process(Self) -> Bool
+pub fn WindowManager::is_main_process(Self) -> Bool
+pub fn WindowManager::request(Self, Int, Int, String, String, timeout_ms? : Int) -> String
+pub fn WindowManager::respond(Self, Int, Int, Int, String) -> Int
+pub fn WindowManager::run_window(Self, Int) -> Int
+pub fn WindowManager::send_message(Self, Int, Int, IpcMessageType, String, String) -> Int
+pub async fn WindowManager::serve_process_commands(Self, Int, async (ProcessCommandRequest) -> ProcessCommandResponse, subtype? : String) -> Unit
+pub fn WindowManager::spawn_process(Self, String, String) -> Int
+pub fn WindowManager::try_pop_message(Self, Int) -> IpcMessage?
+pub fn WindowManager::wait_child_noblock(Self, Int) -> Int
+
+pub(all) enum WindowState {
+  Unknown
+  Created
+  Running
+  Hidden
+  Closing
+  Closed
+} derive(Eq)
+pub fn WindowState::int(Self) -> Int
 
 // Type aliases
 

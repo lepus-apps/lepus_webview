@@ -1,13 +1,2363 @@
-#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <errno.h>
+#include <time.h>
 #include <limits.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <process.h>
+
+typedef DWORD pid_t;
+typedef SOCKET socket_handle_t;
+typedef HANDLE pthread_t;
+typedef SRWLOCK pthread_mutex_t;
+typedef CONDITION_VARIABLE pthread_cond_t;
+
+#define PTHREAD_MUTEX_INITIALIZER SRWLOCK_INIT
+#define PTHREAD_COND_INITIALIZER CONDITION_VARIABLE_INIT
+#define IPC_INVALID_SOCKET INVALID_SOCKET
+#define UNUSED_ATTR
+#define THREAD_LOCAL __declspec(thread)
+#define CLOCK_REALTIME 0
+
+typedef struct
+{
+    void *(*start_routine)(void *);
+    void *arg;
+} moonbit_thread_start_ctx_t;
+
+static unsigned __stdcall moonbit_thread_start(void *arg)
+{
+    moonbit_thread_start_ctx_t *ctx = (moonbit_thread_start_ctx_t *)arg;
+    void *(*start_routine)(void *) = ctx->start_routine;
+    void *start_arg = ctx->arg;
+    free(ctx);
+    start_routine(start_arg);
+    return 0;
+}
+
+static int pthread_create(
+    pthread_t *thread,
+    void *unused_attr,
+    void *(*start_routine)(void *),
+    void *arg)
+{
+    (void)unused_attr;
+    moonbit_thread_start_ctx_t *ctx =
+        (moonbit_thread_start_ctx_t *)malloc(sizeof(moonbit_thread_start_ctx_t));
+    if (!ctx)
+        return ENOMEM;
+    ctx->start_routine = start_routine;
+    ctx->arg = arg;
+
+    uintptr_t handle = _beginthreadex(NULL, 0, moonbit_thread_start, ctx, 0, NULL);
+    if (handle == 0)
+    {
+        int err = errno ? errno : EAGAIN;
+        free(ctx);
+        return err;
+    }
+    *thread = (HANDLE)handle;
+    return 0;
+}
+
+static int pthread_join(pthread_t thread, void **retval)
+{
+    (void)retval;
+    DWORD rc = WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    return rc == WAIT_OBJECT_0 ? 0 : EINVAL;
+}
+
+static int pthread_detach(pthread_t thread)
+{
+    return CloseHandle(thread) ? 0 : EINVAL;
+}
+
+static int pthread_mutex_init(pthread_mutex_t *mutex, void *unused_attr)
+{
+    (void)unused_attr;
+    InitializeSRWLock(mutex);
+    return 0;
+}
+
+static int pthread_mutex_lock(pthread_mutex_t *mutex)
+{
+    AcquireSRWLockExclusive(mutex);
+    return 0;
+}
+
+static int pthread_mutex_unlock(pthread_mutex_t *mutex)
+{
+    ReleaseSRWLockExclusive(mutex);
+    return 0;
+}
+
+static int pthread_cond_init(pthread_cond_t *cond, void *unused_attr)
+{
+    (void)unused_attr;
+    InitializeConditionVariable(cond);
+    return 0;
+}
+
+static int pthread_cond_signal(pthread_cond_t *cond)
+{
+    WakeConditionVariable(cond);
+    return 0;
+}
+
+static int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
+{
+    return SleepConditionVariableSRW(cond, mutex, INFINITE, 0) ? 0 : EINVAL;
+}
+
+static int pthread_cond_timedwait(
+    pthread_cond_t *cond,
+    pthread_mutex_t *mutex,
+    const struct timespec *abstime)
+{
+    FILETIME ft_now;
+    ULARGE_INTEGER now;
+    GetSystemTimeAsFileTime(&ft_now);
+    now.LowPart = ft_now.dwLowDateTime;
+    now.HighPart = ft_now.dwHighDateTime;
+
+    uint64_t now_ns = (now.QuadPart - 116444736000000000ULL) * 100ULL;
+    uint64_t target_ns =
+        (uint64_t)abstime->tv_sec * 1000000000ULL + (uint64_t)abstime->tv_nsec;
+    DWORD timeout_ms = 0;
+    if (target_ns > now_ns)
+    {
+        uint64_t delta_ns = target_ns - now_ns;
+        timeout_ms = (DWORD)((delta_ns + 999999ULL) / 1000000ULL);
+    }
+
+    if (SleepConditionVariableSRW(cond, mutex, timeout_ms, 0))
+        return 0;
+    return GetLastError() == ERROR_TIMEOUT ? ETIMEDOUT : EINVAL;
+}
+
+static int clock_gettime(int clk_id, struct timespec *ts)
+{
+    (void)clk_id;
+    FILETIME ft_now;
+    ULARGE_INTEGER now;
+    GetSystemTimeAsFileTime(&ft_now);
+    now.LowPart = ft_now.dwLowDateTime;
+    now.HighPart = ft_now.dwHighDateTime;
+    uint64_t ns = (now.QuadPart - 116444736000000000ULL) * 100ULL;
+    ts->tv_sec = (time_t)(ns / 1000000000ULL);
+    ts->tv_nsec = (long)(ns % 1000000000ULL);
+    return 0;
+}
+
+static int nanosleep(const struct timespec *req, struct timespec *rem)
+{
+    (void)rem;
+    DWORD ms = (DWORD)(req->tv_sec * 1000 + req->tv_nsec / 1000000L);
+    if (ms == 0 && (req->tv_sec > 0 || req->tv_nsec > 0))
+        ms = 1;
+    Sleep(ms);
+    return 0;
+}
+
+static int get_errno_code(void)
+{
+    int err = WSAGetLastError();
+    switch (err)
+    {
+    case WSAEINTR:
+        return EINTR;
+    case WSAEWOULDBLOCK:
+        return EWOULDBLOCK;
+#ifdef WSAEAGAIN
+    case WSAEAGAIN:
+        return EAGAIN;
+#endif
+    default:
+        return err;
+    }
+}
+
+static int socket_last_error(void)
+{
+    return get_errno_code();
+}
+
+static int socket_would_block(int err)
+{
+    return err == EAGAIN || err == EWOULDBLOCK;
+}
+
+static int socket_interrupted(int err)
+{
+    return err == EINTR;
+}
+
+static void socket_close(socket_handle_t fd)
+{
+    if (fd != IPC_INVALID_SOCKET)
+        closesocket(fd);
+}
+
+static void set_nonblocking(socket_handle_t fd)
+{
+    u_long mode = 1;
+    ioctlsocket(fd, FIONBIO, &mode);
+}
+
+static int winsock_init(void)
+{
+    static int initialized = 0;
+    static pthread_mutex_t init_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&init_mutex);
+    if (!initialized)
+    {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+        {
+            pthread_mutex_unlock(&init_mutex);
+            return -1;
+        }
+        initialized = 1;
+    }
+    pthread_mutex_unlock(&init_mutex);
+    return 0;
+}
+
+#else
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/select.h>
+#include <pthread.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <spawn.h>
+
+typedef int socket_handle_t;
+
+#define IPC_INVALID_SOCKET (-1)
+#define UNUSED_ATTR __attribute__((unused))
+#define THREAD_LOCAL __thread
+
+static int socket_last_error(void)
+{
+    return errno;
+}
+
+static int socket_would_block(int err)
+{
+    return err == EAGAIN || err == EWOULDBLOCK;
+}
+
+static int socket_interrupted(int err)
+{
+    return err == EINTR;
+}
+
+static void socket_close(socket_handle_t fd)
+{
+    if (fd != IPC_INVALID_SOCKET)
+        close(fd);
+}
+
+static void set_nonblocking(socket_handle_t fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0)
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static int winsock_init(void)
+{
+    return 0;
+}
+#endif
+
+/* ── webview 前向声明 ─────────────────────────────────────────── */
+typedef void *webview_t;
+extern webview_t webview_create(int debug, void *window);
+extern void webview_destroy(webview_t w);
+extern void webview_run(webview_t w);
+extern void webview_terminate(webview_t w);
+extern void webview_dispatch(webview_t w, void (*f)(webview_t, void *), void *arg);
+extern void webview_set_title(webview_t w, const char *title);
+extern void webview_set_size(webview_t w, int width, int height, int hints);
+extern void webview_navigate(webview_t w, const char *url);
+extern void webview_init(webview_t w, const char *js);
+extern int webview_eval(webview_t w, const char *js);
+extern void webview_bind(webview_t w, const char *name,
+                         void (*f)(const char *seq, const char *req, void *arg), void *arg);
+extern void webview_unbind(webview_t w, const char *name);
+extern void webview_return(webview_t w, const char *seq, int status, const char *result);
+extern void webview_set_html(webview_t w, const char *html);
+extern int64_t webview_get_window(webview_t w);
+extern int64_t webview_get_native_handle(webview_t w, int kind);
+#ifndef _WIN32
+extern char **environ;
+#endif
+
+/* moonbit 运行时接口 */
 #include "moonbit.h"
 
-typedef void *webview_t;
+/* ── 枚举类型 ─────────────────────────────────────────────────── */
 
-/* ── webview_bind trampoline ─────────────────────────────────────────────── */
+typedef enum
+{
+    WINDOW_STATE_CREATED = 0,
+    WINDOW_STATE_RUNNING = 1,
+    WINDOW_STATE_HIDDEN = 2,
+    WINDOW_STATE_CLOSING = 3,
+    WINDOW_STATE_CLOSED = 4
+} window_state_t;
+
+typedef enum
+{
+    PROCESS_TYPE_MAIN = 0,
+    PROCESS_TYPE_CHILD = 1
+} process_type_t;
+
+typedef enum
+{
+    IPC_MSG_DATA = 0,
+    IPC_MSG_COMMAND = 1,
+    IPC_MSG_EVENT = 2,
+    IPC_MSG_REQUEST = 3,
+    IPC_MSG_RESPONSE = 4
+} ipc_msg_type_t;
+
+typedef enum
+{
+    WINDOW_EVT_CREATED = 0,
+    WINDOW_EVT_SHOWN = 1,
+    WINDOW_EVT_HIDDEN = 2,
+    WINDOW_EVT_FOCUSED = 3,
+    WINDOW_EVT_BLURRED = 4,
+    WINDOW_EVT_CLOSING = 5,
+    WINDOW_EVT_CLOSED = 6,
+    WINDOW_EVT_RESIZED = 7,
+    WINDOW_EVT_MOVED = 8
+} window_evt_t;
+
+typedef enum
+{
+    IPC_CONN_DISCONNECTED = 0,
+    IPC_CONN_CONNECTING = 1,
+    IPC_CONN_CONNECTED = 2,
+    IPC_CONN_ERROR = 3
+} ipc_conn_state_t;
+
+/* ── 常量 ─────────────────────────────────────────────────────── */
+
+#define IPC_MAGIC 0x4D425657u    /* "MBVW" */
+#define IPC_MAX_DATA (64 * 1024) /* 每条消息最大 64 KB 数据 */
+#define IPC_SUBTYPE_LEN 64
+#ifdef _WIN32
+#define IPC_SOCKET_PATH "tcp://127.0.0.1"
+#define IPC_ENDPOINT_ENV "MOONBIT_WEBVIEW_IPC_PORT"
+#else
+#define IPC_SOCKET_PATH "/tmp/moonbit_webview_ipc.sock"
+#endif
+#define IPC_LISTEN_BACKLOG 16
+
+/* ── IPC 消息结构 ─────────────────────────────────────────────── */
+
+/* 线上协议帧头（定长，紧随变长 data） */
+typedef struct
+{
+    uint32_t magic;
+    int32_t total_length; /* sizeof(ipc_frame_hdr_t) + data_length */
+    int32_t source_window_id;
+    int32_t target_window_id;
+    int32_t message_type;
+    int32_t message_id;
+    int32_t flags;
+    char subtype[IPC_SUBTYPE_LEN];
+} ipc_frame_hdr_t;
+
+/* 内存中完整消息（包含数据缓冲区） */
+typedef struct
+{
+    int32_t source_window_id;
+    int32_t target_window_id;
+    ipc_msg_type_t message_type;
+    char subtype[IPC_SUBTYPE_LEN];
+    char *data; /* 堆分配；NULL 表示无数据 */
+    int32_t data_length;
+    int32_t message_id;
+    int32_t flags;
+} ipc_message_t;
+
+/* ── 窗口节点 ─────────────────────────────────────────────────── */
+
+typedef struct webview_window
+{
+    int32_t window_id;
+    webview_t handle;
+    process_type_t process_type;
+    pid_t process_id;
+    window_state_t state;
+    char title[256];
+    int32_t width, height;
+    int32_t x, y;
+    int32_t hints;
+    int32_t debug_mode;
+    char url[1024];
+    int32_t visible;
+    int32_t is_child_process;
+    int32_t parent_window_id;
+    socket_handle_t ipc_client_fd; /* 主进程侧：已接受的客户连接 fd */
+    ipc_conn_state_t ipc_state;
+    void *user_data;
+    /* 事件回调（可为 NULL） */
+    void (*on_event)(struct webview_window *, window_evt_t, void *);
+    struct webview_window *next;
+    struct webview_window *prev;
+} webview_window_t;
+
+/* ── 窗口管理器 ───────────────────────────────────────────────── */
+
+typedef struct
+{
+    webview_window_t *head;
+    webview_window_t *tail;
+    int32_t window_count;
+    int32_t next_window_id;
+    pthread_mutex_t mutex;
+    /* IPC 服务器（主进程） */
+    socket_handle_t ipc_socket;
+    char ipc_socket_path[256];
+    int ipc_server_running;
+    pthread_t ipc_thread;
+    /* 状态标志 */
+    int initialized;
+    process_type_t process_type;
+    pid_t main_process_id;
+    /* 全局回调（可为 NULL） */
+    void (*on_window_created)(webview_window_t *);
+    void (*on_window_destroyed)(int32_t window_id);
+    void (*on_ipc_message)(ipc_message_t *);
+    /* 请求-响应等待支持 */
+    ipc_message_t *pending_response;
+    int32_t pending_msg_id;
+    pthread_cond_t response_cond;
+    pthread_mutex_t response_mutex;
+    pthread_mutex_t request_mutex;
+    /* 全局消息序号 */
+    int32_t next_message_id;
+} window_manager_t;
+
+static window_manager_t g_wm = {
+    .head = NULL,
+    .tail = NULL,
+    .window_count = 0,
+    .next_window_id = 1,
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .ipc_socket = IPC_INVALID_SOCKET,
+    .ipc_socket_path = IPC_SOCKET_PATH,
+    .ipc_server_running = 0,
+    .ipc_thread = 0,
+    .initialized = 0,
+    .process_type = PROCESS_TYPE_MAIN,
+    .main_process_id = -1,
+    .on_window_created = NULL,
+    .on_window_destroyed = NULL,
+    .on_ipc_message = NULL,
+    .pending_response = NULL,
+    .pending_msg_id = -1,
+    .response_cond = PTHREAD_COND_INITIALIZER,
+    .response_mutex = PTHREAD_MUTEX_INITIALIZER,
+    .request_mutex = PTHREAD_MUTEX_INITIALIZER,
+    .next_message_id = 1};
+
+/* ── IPC 子进程客户端 ─────────────────────────────────────────── */
+
+typedef struct
+{
+    socket_handle_t socket_fd;
+    int32_t window_id;
+    int connected;
+    pthread_t listener_thread;
+    int32_t message_seq;
+    ipc_conn_state_t state;
+} ipc_client_t;
+
+static ipc_client_t g_ipc_client = {
+    .socket_fd = IPC_INVALID_SOCKET,
+    .window_id = -1,
+    .connected = 0,
+    .listener_thread = 0,
+    .message_seq = 0,
+    .state = IPC_CONN_DISCONNECTED};
+
+static socket_handle_t *g_remote_window_fds = NULL;
+static int g_remote_window_fds_capacity = 0;
+
+static void ensure_remote_window_fds_capacity_locked(int window_id)
+{
+    if (window_id < 0)
+        return;
+    if (window_id < g_remote_window_fds_capacity)
+        return;
+    int new_cap = g_remote_window_fds_capacity == 0 ? 32 : g_remote_window_fds_capacity * 2;
+    while (new_cap <= window_id)
+        new_cap *= 2;
+    socket_handle_t *new_fds =
+        (socket_handle_t *)realloc(g_remote_window_fds, (size_t)new_cap * sizeof(socket_handle_t));
+    if (!new_fds)
+        return;
+    for (int i = g_remote_window_fds_capacity; i < new_cap; i++)
+        new_fds[i] = IPC_INVALID_SOCKET;
+    g_remote_window_fds = new_fds;
+    g_remote_window_fds_capacity = new_cap;
+}
+
+static void set_remote_window_fd(int window_id, socket_handle_t fd)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    ensure_remote_window_fds_capacity_locked(window_id);
+    if (window_id >= 0 && window_id < g_remote_window_fds_capacity)
+        g_remote_window_fds[window_id] = fd;
+    pthread_mutex_unlock(&g_wm.mutex);
+}
+
+static socket_handle_t get_remote_window_fd(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    socket_handle_t fd =
+        (window_id >= 0 && window_id < g_remote_window_fds_capacity) ? g_remote_window_fds[window_id] : IPC_INVALID_SOCKET;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return fd;
+}
+
+static void clear_remote_window_fd(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    if (window_id >= 0 && window_id < g_remote_window_fds_capacity)
+        g_remote_window_fds[window_id] = IPC_INVALID_SOCKET;
+    pthread_mutex_unlock(&g_wm.mutex);
+}
+
+/* 前向声明：供较早的辅助函数使用。 */
+MOONBIT_FFI_EXPORT int moonbit_wm_dispatch(
+    int window_id,
+    void (*fn)(webview_t, void *),
+    void *arg);
+MOONBIT_FFI_EXPORT int moonbit_wm_get_process_id(void);
+static void ipc_recv_callback(ipc_message_t *msg);
+
+/* ════════════════════════════════════════════════════════════════
+   内部辅助函数
+   ════════════════════════════════════════════════════════════════ */
+
+static char *dup_cstr(const char *src)
+{
+    size_t len = src ? strlen(src) : 0;
+    char *copy = (char *)malloc(len + 1);
+    if (!copy)
+        return NULL;
+    if (len > 0)
+        memcpy(copy, src, len);
+    copy[len] = '\0';
+    return copy;
+}
+
+typedef struct
+{
+    char *js;
+} eval_js_ctx_t;
+
+static void eval_js_trampoline(webview_t handle, void *arg)
+{
+    eval_js_ctx_t *ctx = (eval_js_ctx_t *)arg;
+    webview_eval(handle, ctx->js);
+    free(ctx->js);
+    free(ctx);
+}
+
+typedef struct
+{
+    char *seq;
+    int status;
+    char *result;
+} return_raw_ctx_t;
+
+static void return_raw_trampoline(webview_t handle, void *arg)
+{
+    return_raw_ctx_t *ctx = (return_raw_ctx_t *)arg;
+    webview_return(handle, ctx->seq, ctx->status, ctx->result);
+    free(ctx->seq);
+    free(ctx->result);
+    free(ctx);
+}
+
+typedef void (*moonbit_thread_closure_t)(void *arg);
+
+typedef struct
+{
+    moonbit_thread_closure_t callback;
+    void *arg;
+} moonbit_thread_task_t;
+
+static void *moonbit_background_thread_main(void *arg)
+{
+    moonbit_thread_task_t *task = (moonbit_thread_task_t *)arg;
+    task->callback(task->arg);
+    if (task->arg)
+        moonbit_decref(task->arg);
+    free(task);
+    return NULL;
+}
+
+/* 通过 window_id 查找窗口节点（需在锁外调用，或已持有锁） */
+static webview_window_t *find_window(int32_t id)
+{
+    webview_window_t *w = g_wm.head;
+    while (w)
+    {
+        if (w->window_id == id)
+            return w;
+        w = w->next;
+    }
+    return NULL;
+}
+
+/* 通过进程 PID 查找窗口节点 */
+UNUSED_ATTR static webview_window_t *find_window_by_pid(pid_t pid)
+{
+    webview_window_t *w = g_wm.head;
+    while (w)
+    {
+        if (w->process_id == pid)
+            return w;
+        w = w->next;
+    }
+    return NULL;
+}
+
+/* 生成唯一窗口 ID */
+static int32_t alloc_window_id(void)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    int32_t id = g_wm.next_window_id++;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return id;
+}
+
+/* 生成唯一消息 ID */
+static int32_t alloc_message_id(void)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    int32_t id = g_wm.next_message_id++;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return id;
+}
+
+/* 将窗口节点插入链表尾部 */
+static void wm_add(webview_window_t *w)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    w->next = NULL;
+    w->prev = g_wm.tail;
+    if (g_wm.tail)
+        g_wm.tail->next = w;
+    else
+        g_wm.head = w;
+    g_wm.tail = w;
+    g_wm.window_count++;
+    pthread_mutex_unlock(&g_wm.mutex);
+}
+
+/* 从链表中摘除窗口节点（不释放内存） */
+static void wm_remove(webview_window_t *w)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    if (w->prev)
+        w->prev->next = w->next;
+    else
+        g_wm.head = w->next;
+    if (w->next)
+        w->next->prev = w->prev;
+    else
+        g_wm.tail = w->prev;
+    g_wm.window_count--;
+    pthread_mutex_unlock(&g_wm.mutex);
+}
+
+/* 触发窗口事件回调 */
+static void fire_window_event(webview_window_t *w, window_evt_t evt, void *data)
+{
+    if (w && w->on_event)
+        w->on_event(w, evt, data);
+}
+
+/* 触发 IPC 消息回调 */
+static void fire_ipc_message(ipc_message_t *msg)
+{
+    if (g_wm.on_ipc_message)
+        g_wm.on_ipc_message(msg);
+}
+
+/* 释放 ipc_message_t 中的堆数据 */
+static void ipc_message_free(ipc_message_t *msg)
+{
+    if (msg && msg->data)
+    {
+        free(msg->data);
+        msg->data = NULL;
+        msg->data_length = 0;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   IPC 低层 I/O：带重试的全量读/写
+   ════════════════════════════════════════════════════════════════ */
+
+/* 向 fd 写入 len 字节，自动处理 EINTR/EAGAIN；失败返回 -1 */
+static int write_all(socket_handle_t fd, const void *buf, int len)
+{
+    const char *p = (const char *)buf;
+    int remaining = len;
+    while (remaining > 0)
+    {
+        int n = (int)send(fd, p, remaining, 0);
+        if (n < 0)
+        {
+            int err = socket_last_error();
+            if (socket_interrupted(err))
+                continue;
+            if (socket_would_block(err))
+            {
+                /* 轮询等待 1ms */
+                struct timespec ts = {0, 1000000};
+                nanosleep(&ts, NULL);
+                continue;
+            }
+            return -1;
+        }
+        p += n;
+        remaining -= n;
+    }
+    return len;
+}
+
+/* 从 fd 精确读取 len 字节，自动处理 EINTR；连接关闭或错误返回 -1 */
+static int read_exact(socket_handle_t fd, void *buf, int len)
+{
+    char *p = (char *)buf;
+    int remaining = len;
+    while (remaining > 0)
+    {
+        int n = (int)recv(fd, p, remaining, 0);
+        if (n < 0)
+        {
+            int err = socket_last_error();
+            if (socket_interrupted(err))
+                continue;
+            if (socket_would_block(err))
+            {
+                struct timespec ts = {0, 1000000};
+                nanosleep(&ts, NULL);
+                continue;
+            }
+            return -1;
+        }
+        if (n == 0)
+            return -1; /* 对端关闭 */
+        p += n;
+        remaining -= n;
+    }
+    return len;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   IPC 消息序列化 / 反序列化
+   ════════════════════════════════════════════════════════════════ */
+
+/* 将 ipc_message_t 序列化为帧并写入 fd；成功返回 0 */
+static int ipc_send(socket_handle_t fd, const ipc_message_t *msg)
+{
+    int32_t data_len = msg->data ? msg->data_length : 0;
+    ipc_frame_hdr_t hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.magic = IPC_MAGIC;
+    hdr.total_length = (int32_t)(sizeof(ipc_frame_hdr_t) + data_len);
+    hdr.source_window_id = msg->source_window_id;
+    hdr.target_window_id = msg->target_window_id;
+    hdr.message_type = msg->message_type;
+    hdr.message_id = msg->message_id;
+    hdr.flags = msg->flags;
+    strncpy(hdr.subtype, msg->subtype, IPC_SUBTYPE_LEN - 1);
+
+    if (write_all(fd, &hdr, sizeof(hdr)) < 0)
+        return -1;
+    if (data_len > 0 && write_all(fd, msg->data, data_len) < 0)
+        return -1;
+    return 0;
+}
+
+/* 从 fd 读取一条消息并填充 *out（data 字段堆分配，调用方负责释放）；失败返回 -1 */
+static int ipc_recv(socket_handle_t fd, ipc_message_t *out)
+{
+    ipc_frame_hdr_t hdr;
+    if (read_exact(fd, &hdr, sizeof(hdr)) < 0)
+        return -1;
+    if (hdr.magic != IPC_MAGIC)
+    {
+        fprintf(stderr, "[IPC] bad magic 0x%08X\n", hdr.magic);
+        return -1;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->source_window_id = hdr.source_window_id;
+    out->target_window_id = hdr.target_window_id;
+    out->message_type = (ipc_msg_type_t)hdr.message_type;
+    out->message_id = hdr.message_id;
+    out->flags = hdr.flags;
+    strncpy(out->subtype, hdr.subtype, IPC_SUBTYPE_LEN - 1);
+
+    int32_t data_len = hdr.total_length - (int32_t)sizeof(ipc_frame_hdr_t);
+    out->data_length = data_len;
+    if (data_len > 0)
+    {
+        if (data_len > IPC_MAX_DATA)
+        {
+            fprintf(stderr, "[IPC] message too large: %d bytes\n", data_len);
+            return -1;
+        }
+        out->data = (char *)malloc(data_len + 1);
+        if (!out->data)
+            return -1;
+        if (read_exact(fd, out->data, data_len) < 0)
+        {
+            free(out->data);
+            out->data = NULL;
+            return -1;
+        }
+        out->data[data_len] = '\0';
+    }
+    return 0;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   IPC 服务器（主进程）
+   ════════════════════════════════════════════════════════════════ */
+
+/* 每个客户端连接的上下文 */
+typedef struct
+{
+    socket_handle_t client_fd;
+    int32_t remote_window_id; /* 握手后从第一条消息获取 */
+    pthread_t thread;
+} ipc_conn_ctx_t;
+
+/* 路由消息到目标窗口的子进程连接 */
+static void route_message(ipc_message_t *msg)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *target = find_window(msg->target_window_id);
+    socket_handle_t target_fd =
+        (target && target->ipc_client_fd != IPC_INVALID_SOCKET) ? target->ipc_client_fd : IPC_INVALID_SOCKET;
+    if (target_fd == IPC_INVALID_SOCKET && msg->target_window_id >= 0 && msg->target_window_id < g_remote_window_fds_capacity)
+        target_fd = g_remote_window_fds[msg->target_window_id];
+    pthread_mutex_unlock(&g_wm.mutex);
+
+    if (target_fd != IPC_INVALID_SOCKET)
+    {
+        ipc_send(target_fd, msg);
+    }
+}
+
+static void *ipc_conn_handler(void *arg)
+{
+    ipc_conn_ctx_t *ctx = (ipc_conn_ctx_t *)arg;
+    ipc_message_t msg;
+
+    while (g_wm.ipc_server_running)
+    {
+        if (ipc_recv(ctx->client_fd, &msg) < 0)
+            break;
+
+        /* 第一条消息用于注册远端窗口 ID */
+        if (ctx->remote_window_id < 0 && msg.source_window_id > 0)
+        {
+            ctx->remote_window_id = msg.source_window_id;
+            ensure_remote_window_fds_capacity_locked(msg.source_window_id);
+            if (msg.source_window_id < g_remote_window_fds_capacity)
+                g_remote_window_fds[msg.source_window_id] = ctx->client_fd;
+            pthread_mutex_lock(&g_wm.mutex);
+            webview_window_t *w = find_window(msg.source_window_id);
+            if (w)
+            {
+                w->ipc_client_fd = ctx->client_fd;
+                w->ipc_state = IPC_CONN_CONNECTED;
+            }
+            pthread_mutex_unlock(&g_wm.mutex);
+        }
+
+        /* 通知应用层 */
+        fire_ipc_message(&msg);
+
+        /* 若是请求/数据，尝试路由到目标窗口 */
+        if (msg.message_type == IPC_MSG_REQUEST ||
+            msg.message_type == IPC_MSG_DATA)
+        {
+            route_message(&msg);
+        }
+
+        /* 若是响应，唤醒等待方 */
+        if (msg.message_type == IPC_MSG_RESPONSE)
+        {
+            pthread_mutex_lock(&g_wm.response_mutex);
+            if (g_wm.pending_response &&
+                g_wm.pending_msg_id == msg.message_id)
+            {
+                /* 深拷贝给等待方 */
+                *g_wm.pending_response = msg;
+                msg.data = NULL; /* 转移所有权，不在此处释放 */
+                pthread_cond_signal(&g_wm.response_cond);
+            }
+            pthread_mutex_unlock(&g_wm.response_mutex);
+        }
+
+        ipc_message_free(&msg);
+    }
+
+    /* 连接断开：清理映射 */
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(ctx->remote_window_id);
+    if (w)
+    {
+        w->ipc_client_fd = IPC_INVALID_SOCKET;
+        w->ipc_state = IPC_CONN_DISCONNECTED;
+    }
+    pthread_mutex_unlock(&g_wm.mutex);
+    clear_remote_window_fd(ctx->remote_window_id);
+
+    socket_close(ctx->client_fd);
+    free(ctx);
+    return NULL;
+}
+
+static void *ipc_server_thread(void *arg)
+{
+    (void)arg;
+    while (g_wm.ipc_server_running)
+    {
+        fd_set rfds;
+        struct timeval tv = {0, 100000}; /* 100ms 超时 */
+        FD_ZERO(&rfds);
+        FD_SET(g_wm.ipc_socket, &rfds);
+
+        int ret = select(g_wm.ipc_socket + 1, &rfds, NULL, NULL, &tv);
+        if (ret < 0)
+        {
+            if (socket_interrupted(socket_last_error()))
+                continue;
+            perror("[IPC] select");
+            break;
+        }
+        if (ret == 0)
+            continue;
+
+        socket_handle_t client_fd = accept(g_wm.ipc_socket, NULL, NULL);
+        if (client_fd == IPC_INVALID_SOCKET)
+        {
+            int err = socket_last_error();
+            if (socket_interrupted(err) || socket_would_block(err))
+                continue;
+            perror("[IPC] accept");
+            continue;
+        }
+        /* 客户端 fd 保持阻塞模式，由专属线程驱动 */
+
+        ipc_conn_ctx_t *ctx = (ipc_conn_ctx_t *)calloc(1, sizeof(ipc_conn_ctx_t));
+        ctx->client_fd = client_fd;
+        ctx->remote_window_id = -1;
+        pthread_create(&ctx->thread, NULL, ipc_conn_handler, ctx);
+        pthread_detach(ctx->thread);
+    }
+    return NULL;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   IPC 客户端监听线程（子进程）
+   ════════════════════════════════════════════════════════════════ */
+
+static void *ipc_client_listener(void *arg)
+{
+    (void)arg;
+    ipc_message_t msg;
+
+    while (g_ipc_client.connected)
+    {
+        if (ipc_recv(g_ipc_client.socket_fd, &msg) < 0)
+        {
+            g_ipc_client.connected = 0;
+            g_ipc_client.state = IPC_CONN_DISCONNECTED;
+            break;
+        }
+
+        fire_ipc_message(&msg);
+
+        /* 响应：唤醒等待方 */
+        if (msg.message_type == IPC_MSG_RESPONSE)
+        {
+            pthread_mutex_lock(&g_wm.response_mutex);
+            if (g_wm.pending_response &&
+                g_wm.pending_msg_id == msg.message_id)
+            {
+                *g_wm.pending_response = msg;
+                msg.data = NULL;
+                pthread_cond_signal(&g_wm.response_cond);
+            }
+            pthread_mutex_unlock(&g_wm.response_mutex);
+        }
+
+        ipc_message_free(&msg);
+    }
+    return NULL;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   IPC socket 工厂
+   ════════════════════════════════════════════════════════════════ */
+
+static socket_handle_t create_ipc_server_socket(void)
+{
+    if (winsock_init() != 0)
+    {
+        return IPC_INVALID_SOCKET;
+    }
+#ifdef _WIN32
+    socket_handle_t sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == IPC_INVALID_SOCKET)
+    {
+        perror("[IPC] socket");
+        return IPC_INVALID_SOCKET;
+    }
+
+    set_nonblocking(sock);
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(0);
+
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+    {
+        perror("[IPC] bind");
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
+    }
+
+    int addr_len = (int)sizeof(addr);
+    if (getsockname(sock, (struct sockaddr *)&addr, &addr_len) != 0)
+    {
+        perror("[IPC] getsockname");
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
+    }
+
+    if (listen(sock, IPC_LISTEN_BACKLOG) != 0)
+    {
+        perror("[IPC] listen");
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
+    }
+
+    _snprintf(g_wm.ipc_socket_path, sizeof(g_wm.ipc_socket_path),
+              "%s:%u", IPC_SOCKET_PATH, (unsigned)ntohs(addr.sin_port));
+    {
+        char port_buf[16];
+        _snprintf(port_buf, sizeof(port_buf), "%u", (unsigned)ntohs(addr.sin_port));
+        SetEnvironmentVariableA(IPC_ENDPOINT_ENV, port_buf);
+    }
+#else
+    socket_handle_t sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0)
+    {
+        perror("[IPC] socket");
+        return IPC_INVALID_SOCKET;
+    }
+    set_nonblocking(sock);
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, g_wm.ipc_socket_path, sizeof(addr.sun_path) - 1);
+    unlink(g_wm.ipc_socket_path);
+
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    {
+        perror("[IPC] bind");
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
+    }
+    if (listen(sock, IPC_LISTEN_BACKLOG) < 0)
+    {
+        perror("[IPC] listen");
+        socket_close(sock);
+        return IPC_INVALID_SOCKET;
+    }
+#endif
+    g_wm.ipc_socket = sock;
+    return sock;
+}
+
+static socket_handle_t connect_to_ipc_server(void)
+{
+    /* 子进程启动时主进程可能还未就绪，最多重试 10 次 */
+    for (int attempt = 0; attempt < 10; attempt++)
+    {
+#ifdef _WIN32
+        if (winsock_init() != 0)
+            return IPC_INVALID_SOCKET;
+        socket_handle_t sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock == IPC_INVALID_SOCKET)
+        {
+            perror("[IPC] socket");
+            return IPC_INVALID_SOCKET;
+        }
+
+        const char *port_str = getenv(IPC_ENDPOINT_ENV);
+        if (!port_str || !port_str[0])
+        {
+            socket_close(sock);
+            fprintf(stderr, "[IPC] missing %s\n", IPC_ENDPOINT_ENV);
+            return IPC_INVALID_SOCKET;
+        }
+
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons((unsigned short)atoi(port_str));
+#else
+        socket_handle_t sock = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (sock < 0)
+        {
+            perror("[IPC] socket");
+            return IPC_INVALID_SOCKET;
+        }
+
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, g_wm.ipc_socket_path, sizeof(addr.sun_path) - 1);
+#endif
+
+        if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0)
+        {
+            return sock; /* 成功 */
+        }
+        socket_close(sock);
+        struct timespec ts = {0, 50000000}; /* 50ms */
+        nanosleep(&ts, NULL);
+    }
+    fprintf(stderr, "[IPC] connect failed after retries\n");
+    return IPC_INVALID_SOCKET;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MoonBit FFI 导出 —— 窗口管理器生命周期
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * 初始化窗口管理器。
+ * is_main_process = 1 → 启动 IPC 服务器；= 0 → 子进程模式（跳过服务器）。
+ * 返回 0 成功，-1 失败。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_init(int is_main_process)
+{
+    if (g_wm.initialized)
+        return 0;
+
+    g_wm.process_type = is_main_process ? PROCESS_TYPE_MAIN : PROCESS_TYPE_CHILD;
+    g_wm.main_process_id = (pid_t)moonbit_wm_get_process_id();
+
+    if (is_main_process)
+    {
+        if (create_ipc_server_socket() == IPC_INVALID_SOCKET)
+            return -1;
+        g_wm.ipc_server_running = 1;
+        pthread_create(&g_wm.ipc_thread, NULL, ipc_server_thread, NULL);
+    }
+
+    g_wm.initialized = 1;
+    g_wm.on_ipc_message = ipc_recv_callback;
+    return 0;
+}
+
+/**
+ * 销毁所有窗口并释放全局资源。
+ */
+MOONBIT_FFI_EXPORT void moonbit_wm_cleanup(void)
+{
+    if (!g_wm.initialized)
+        return;
+
+    /* 关闭所有窗口 */
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *cur = g_wm.head;
+    while (cur)
+    {
+        webview_window_t *nxt = cur->next;
+        if (cur->handle)
+        {
+            webview_destroy(cur->handle);
+            cur->handle = NULL;
+        }
+        free(cur);
+        cur = nxt;
+    }
+    g_wm.head = g_wm.tail = NULL;
+    g_wm.window_count = 0;
+    pthread_mutex_unlock(&g_wm.mutex);
+
+    /* 关闭 IPC 服务器 */
+    if (g_wm.ipc_server_running)
+    {
+        g_wm.ipc_server_running = 0;
+        pthread_join(g_wm.ipc_thread, NULL);
+        socket_close(g_wm.ipc_socket);
+#ifndef _WIN32
+        unlink(g_wm.ipc_socket_path);
+#else
+        SetEnvironmentVariableA(IPC_ENDPOINT_ENV, NULL);
+#endif
+        g_wm.ipc_socket = IPC_INVALID_SOCKET;
+    }
+
+    /* 关闭子进程 IPC 客户端 */
+    if (g_ipc_client.connected)
+    {
+        g_ipc_client.connected = 0;
+        pthread_join(g_ipc_client.listener_thread, NULL);
+        socket_close(g_ipc_client.socket_fd);
+        g_ipc_client.socket_fd = IPC_INVALID_SOCKET;
+        g_ipc_client.state = IPC_CONN_DISCONNECTED;
+    }
+
+    g_wm.initialized = 0;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MoonBit FFI 导出 —— 窗口创建 / 销毁 / 运行
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * 创建并注册一个新窗口。
+ * 返回 window_id（>0），失败返回 -1。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_create_window(
+    const char *title,
+    const char *url,
+    int width, int height,
+    int x, int y,
+    int hints,
+    int debug,
+    int parent_window_id)
+{
+    if (!g_wm.initialized)
+        moonbit_wm_init(1);
+
+    webview_window_t *w = (webview_window_t *)calloc(1, sizeof(webview_window_t));
+    if (!w)
+        return -1;
+
+    w->window_id = alloc_window_id();
+    w->process_id = (pid_t)moonbit_wm_get_process_id();
+    w->process_type = g_wm.process_type;
+    w->state = WINDOW_STATE_CREATED;
+    w->parent_window_id = parent_window_id;
+    w->is_child_process = (g_wm.process_type == PROCESS_TYPE_CHILD) ? 1 : 0;
+    w->visible = 1;
+    w->ipc_client_fd = IPC_INVALID_SOCKET;
+    w->ipc_state = IPC_CONN_DISCONNECTED;
+    w->width = width > 0 ? width : 800;
+    w->height = height > 0 ? height : 600;
+    w->x = x;
+    w->y = y;
+    w->hints = hints;
+    w->debug_mode = debug;
+    strncpy(w->title, title ? title : "MoonBit WebView", sizeof(w->title) - 1);
+    strncpy(w->url, url ? url : "", sizeof(w->url) - 1);
+
+    /* 创建底层 webview 实例 */
+    w->handle = webview_create(debug, NULL);
+    if (!w->handle)
+    {
+        free(w);
+        return -1;
+    }
+
+    webview_set_title(w->handle, w->title);
+    webview_set_size(w->handle, w->width, w->height, w->hints);
+    if (w->url[0])
+        webview_navigate(w->handle, w->url);
+
+    wm_add(w);
+
+    if (g_wm.on_window_created)
+        g_wm.on_window_created(w);
+    fire_window_event(w, WINDOW_EVT_CREATED, NULL);
+
+    return w->window_id;
+}
+
+/**
+ * 销毁指定窗口并从管理器移除。
+ * 返回 0 成功，-1 未找到。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_destroy_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w)
+        return -1;
+
+    w->state = WINDOW_STATE_CLOSING;
+    fire_window_event(w, WINDOW_EVT_CLOSING, NULL);
+
+    if (w->handle)
+    {
+        webview_destroy(w->handle);
+        w->handle = NULL;
+    }
+    if (w->ipc_client_fd != IPC_INVALID_SOCKET)
+    {
+        socket_close(w->ipc_client_fd);
+        w->ipc_client_fd = IPC_INVALID_SOCKET;
+    }
+
+    w->state = WINDOW_STATE_CLOSED;
+    fire_window_event(w, WINDOW_EVT_CLOSED, NULL);
+
+    wm_remove(w);
+    if (g_wm.on_window_destroyed)
+        g_wm.on_window_destroyed(window_id);
+    free(w);
+    return 0;
+}
+
+/**
+ * 阻塞式运行窗口事件循环（直到 webview_terminate 被调用）。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_run_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    w->state = WINDOW_STATE_RUNNING;
+    webview_run(w->handle);
+    return 0;
+}
+
+typedef struct
+{
+    int window_id;
+} run_window_async_ctx_t;
+
+static void *run_window_async_main(void *arg)
+{
+    run_window_async_ctx_t *ctx = (run_window_async_ctx_t *)arg;
+    int window_id = ctx->window_id;
+    free(ctx);
+
+    moonbit_wm_run_window(window_id);
+    moonbit_wm_destroy_window(window_id);
+    return NULL;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_run_window_async(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    run_window_async_ctx_t *ctx =
+        (run_window_async_ctx_t *)malloc(sizeof(run_window_async_ctx_t));
+    if (!ctx)
+        return -1;
+    ctx->window_id = window_id;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, run_window_async_main, ctx) != 0)
+    {
+        free(ctx);
+        return -1;
+    }
+    pthread_detach(thread);
+    return 0;
+}
+
+/**
+ * 请求窗口退出其事件循环。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_terminate_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    webview_terminate(w->handle);
+    return 0;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MoonBit FFI 导出 —— 窗口属性
+   ════════════════════════════════════════════════════════════════ */
+
+MOONBIT_FFI_EXPORT int moonbit_wm_set_title(int window_id, const char *title)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    strncpy(w->title, title, sizeof(w->title) - 1);
+    webview_set_title(w->handle, title);
+    return 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_set_size(int window_id, int width, int height, int hints)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    w->width = width;
+    w->height = height;
+    w->hints = hints;
+    webview_set_size(w->handle, width, height, hints);
+
+    int size_data[2] = {width, height};
+    fire_window_event(w, WINDOW_EVT_RESIZED, size_data);
+    return 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_navigate(int window_id, const char *url)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    strncpy(w->url, url, sizeof(w->url) - 1);
+    webview_navigate(w->handle, url);
+    return 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_set_html(int window_id, const char *html)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    webview_set_html(w->handle, html);
+    return 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_eval_js(int window_id, const char *js)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    int is_running = w && w->state == WINDOW_STATE_RUNNING;
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    if (is_running)
+    {
+        eval_js_ctx_t *ctx = (eval_js_ctx_t *)malloc(sizeof(eval_js_ctx_t));
+        if (!ctx)
+            return -1;
+        ctx->js = dup_cstr(js);
+        if (!ctx->js)
+        {
+            free(ctx);
+            return -1;
+        }
+
+        if (moonbit_wm_dispatch(window_id, eval_js_trampoline, ctx) != 0)
+        {
+            free(ctx->js);
+            free(ctx);
+            return -1;
+        }
+        return 0;
+    }
+
+    return webview_eval(w->handle, js);
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_init_js(int window_id, const char *js)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    webview_init(w->handle, js);
+    return 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_return_raw(
+    int window_id,
+    const char *seq,
+    int status,
+    const char *result)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    int is_running = w && w->state == WINDOW_STATE_RUNNING;
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+    if (!is_running)
+    {
+        webview_return(w->handle, seq, status, result);
+        return 0;
+    }
+
+    return_raw_ctx_t *ctx = (return_raw_ctx_t *)malloc(sizeof(return_raw_ctx_t));
+    if (!ctx)
+        return -1;
+    ctx->seq = dup_cstr(seq);
+    ctx->result = dup_cstr(result);
+    ctx->status = status;
+    if (!ctx->seq || !ctx->result)
+    {
+        free(ctx->seq);
+        free(ctx->result);
+        free(ctx);
+        return -1;
+    }
+
+    if (moonbit_wm_dispatch(window_id, return_raw_trampoline, ctx) != 0)
+    {
+        free(ctx->seq);
+        free(ctx->result);
+        free(ctx);
+        return -1;
+    }
+    return 0;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MoonBit FFI 导出 —— 窗口可见性
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * 设置窗口可见性（供 binding.mbt 调用）。
+ * visible = 1 显示，visible = 0 隐藏。
+ * 注意：libwebview 不直接暴露 show/hide；通过 dispatch + 平台 API 实现。
+ * 此处记录状态并触发事件；平台级实现可在上层 MoonBit 代码中扩展。
+ */
+MOONBIT_FFI_EXPORT int moonbit_webview_set_window_visibility(int window_id, int visible)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w)
+        return -1;
+
+    w->visible = visible ? 1 : 0;
+    w->state = visible ? WINDOW_STATE_RUNNING : WINDOW_STATE_HIDDEN;
+    fire_window_event(w, visible ? WINDOW_EVT_SHOWN : WINDOW_EVT_HIDDEN, NULL);
+    return 0;
+}
+
+/** 获取窗口可见状态；未找到返回 -1。 */
+MOONBIT_FFI_EXPORT int moonbit_webview_get_window_visibility(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    int vis = w ? w->visible : -1;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return vis;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MoonBit FFI 导出 —— 窗口属性查询（供 binding.mbt 调用）
+   ════════════════════════════════════════════════════════════════ */
+
+/** 获取当前已注册的窗口数量。 */
+MOONBIT_FFI_EXPORT int moonbit_wm_get_window_count(void)
+{
+    return g_wm.window_count;
+}
+
+/**
+ * 按索引获取窗口 ID（0-based）。
+ * 返回 window_id，未找到返回 -1。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_get_window_id_at(int index)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = g_wm.head;
+    int i = 0;
+    while (w && i < index)
+    {
+        w = w->next;
+        i++;
+    }
+    int id = w ? w->window_id : -1;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return id;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_get_parent_window_id(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    int pid_val = w ? w->parent_window_id : -1;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return pid_val;
+}
+
+
+/* ════════════════════════════════════════════════════════════════
+   MoonBit FFI 导出 —— 多进程支持
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * fork 出一个子进程，在其中创建并运行窗口。
+ * 父进程立即返回子进程 PID（>0）；子进程不返回（退出时调用 exit(0)）。
+ * 失败返回 -1。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_create_child_window(
+    const char *title,
+    const char *url,
+    int width, int height,
+    int parent_window_id)
+{
+#ifdef _WIN32
+    (void)title;
+    (void)url;
+    (void)width;
+    (void)height;
+    (void)parent_window_id;
+    fprintf(stderr, "[WM] moonbit_wm_create_child_window is not supported on WIN32; use spawn/connect flow instead\n");
+    return -1;
+#else
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        perror("[WM] fork");
+        return -1;
+    }
+
+    if (pid == 0)
+    {
+        /* ── 子进程 ─────────────────────────────────────────────── */
+        /* 重置全局状态（fork 后继承了父进程的内存快照） */
+        g_wm.initialized = 0;
+        g_wm.process_type = PROCESS_TYPE_CHILD;
+        g_wm.head = g_wm.tail = NULL;
+        g_wm.window_count = 0;
+        g_wm.ipc_server_running = 0;
+        g_ipc_client.connected = 0;
+
+        /* 连接到父进程 IPC 服务器 */
+        socket_handle_t sock = connect_to_ipc_server();
+        if (sock == IPC_INVALID_SOCKET)
+        {
+            fprintf(stderr, "[WM-child] IPC connect failed\n");
+            exit(1);
+        }
+
+        g_ipc_client.socket_fd = sock;
+        g_ipc_client.connected = 1;
+        g_ipc_client.state = IPC_CONN_CONNECTED;
+
+        /* 初始化子进程窗口管理器（不启动 IPC 服务器） */
+        moonbit_wm_init(0);
+
+        pthread_create(&g_ipc_client.listener_thread, NULL, ipc_client_listener, NULL);
+
+        /* 创建窗口 */
+        int wid = moonbit_wm_create_window(title, url, width, height,
+                                           0, 0, 0, 0, parent_window_id);
+        if (wid < 0)
+        {
+            fprintf(stderr, "[WM-child] create_window failed\n");
+            exit(1);
+        }
+
+        g_ipc_client.window_id = wid;
+
+        /* 向主进程发送注册事件 */
+        char payload[256];
+        snprintf(payload, sizeof(payload),
+                 "{\"window_id\":%d,\"pid\":%d,\"parent_id\":%d,\"title\":\"%s\"}",
+                 wid, moonbit_wm_get_process_id(), parent_window_id, title ? title : "");
+
+        ipc_message_t reg = {0};
+        reg.source_window_id = wid;
+        reg.target_window_id = 0;
+        reg.message_type = IPC_MSG_EVENT;
+        reg.message_id = ++g_ipc_client.message_seq;
+        strncpy(reg.subtype, "window_registered", IPC_SUBTYPE_LEN - 1);
+        reg.data = payload;
+        reg.data_length = (int32_t)strlen(payload);
+        ipc_send(sock, &reg);
+
+        /* 运行事件循环（阻塞直到窗口关闭） */
+        moonbit_wm_run_window(wid);
+
+        /* 清理并退出 */
+        moonbit_wm_destroy_window(wid);
+        moonbit_wm_cleanup();
+        exit(0);
+    }
+
+    /* ── 父进程：返回子 PID ─────────────────────────────────────── */
+    return (int)pid;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_fork_process(void)
+{
+#ifdef _WIN32
+    fprintf(stderr, "[WM] moonbit_wm_fork_process is not supported on WIN32; use moonbit_wm_spawn_process instead\n");
+    return -1;
+#else
+    if (!g_wm.initialized)
+    {
+        if (moonbit_wm_init(1) != 0)
+            return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        perror("[WM] fork");
+        return -1;
+    }
+
+    if (pid == 0)
+    {
+        g_wm.initialized = 0;
+        g_wm.process_type = PROCESS_TYPE_CHILD;
+        g_wm.head = g_wm.tail = NULL;
+        g_wm.window_count = 0;
+        g_wm.next_window_id = 1;
+        g_wm.ipc_server_running = 0;
+        g_wm.on_ipc_message = NULL;
+        g_ipc_client.connected = 0;
+
+        socket_handle_t sock = connect_to_ipc_server();
+        if (sock == IPC_INVALID_SOCKET)
+        {
+            fprintf(stderr, "[WM-child] IPC connect failed\n");
+            exit(1);
+        }
+
+        g_ipc_client.socket_fd = sock;
+        g_ipc_client.connected = 1;
+        g_ipc_client.state = IPC_CONN_CONNECTED;
+
+        if (moonbit_wm_init(0) != 0)
+        {
+            fprintf(stderr, "[WM-child] init failed\n");
+            exit(1);
+        }
+
+        pthread_create(&g_ipc_client.listener_thread, NULL, ipc_client_listener, NULL);
+        return 0;
+    }
+
+    return (int)pid;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_spawn_process(
+    const char *program,
+    const char *arg1)
+{
+    if (!program || !program[0])
+        return -1;
+
+#ifdef _WIN32
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char command_line[2048];
+    const char *extra_arg = (arg1 && arg1[0]) ? arg1 : NULL;
+
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+
+    if (extra_arg)
+        _snprintf(command_line, sizeof(command_line), "\"%s\" \"%s\"", program, extra_arg);
+    else
+        _snprintf(command_line, sizeof(command_line), "\"%s\"", program);
+    command_line[sizeof(command_line) - 1] = '\0';
+
+    if (!CreateProcessA(
+            program,
+            command_line,
+            NULL,
+            NULL,
+            TRUE,
+            0,
+            NULL,
+            NULL,
+            &si,
+            &pi))
+    {
+        fprintf(stderr, "[WM] CreateProcess failed: %lu\n", (unsigned long)GetLastError());
+        return -1;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)pi.dwProcessId;
+#else
+    pid_t pid = 0;
+    char *const argv[] = {
+        (char *)program,
+        (char *)(arg1 && arg1[0] ? arg1 : NULL),
+        NULL};
+
+    int rc = posix_spawn(&pid, program, NULL, NULL, argv, environ);
+    if (rc != 0)
+    {
+        errno = rc;
+        perror("[WM] posix_spawn");
+        return -1;
+    }
+    return (int)pid;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_connect_child_process(void)
+{
+    g_wm.initialized = 0;
+    g_wm.process_type = PROCESS_TYPE_CHILD;
+    g_wm.head = g_wm.tail = NULL;
+    g_wm.window_count = 0;
+    g_wm.next_window_id = 1;
+    g_wm.ipc_server_running = 0;
+    g_wm.on_ipc_message = NULL;
+    g_ipc_client.connected = 0;
+
+    socket_handle_t sock = connect_to_ipc_server();
+    if (sock == IPC_INVALID_SOCKET)
+    {
+        fprintf(stderr, "[WM-child] IPC connect failed\n");
+        return -1;
+    }
+
+    g_ipc_client.socket_fd = sock;
+    g_ipc_client.connected = 1;
+    g_ipc_client.state = IPC_CONN_CONNECTED;
+
+    if (moonbit_wm_init(0) != 0)
+        return -1;
+
+    pthread_create(&g_ipc_client.listener_thread, NULL, ipc_client_listener, NULL);
+    return 0;
+}
+
+/** 阻塞等待子进程结束；status 接收退出状态（可为 NULL）。 */
+MOONBIT_FFI_EXPORT int moonbit_wm_wait_child(int pid, int *status)
+{
+#ifdef _WIN32
+    HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!process)
+        return -1;
+    DWORD wait_rc = WaitForSingleObject(process, INFINITE);
+    if (wait_rc != WAIT_OBJECT_0)
+    {
+        CloseHandle(process);
+        return -1;
+    }
+    if (status)
+    {
+        DWORD exit_code = 0;
+        if (!GetExitCodeProcess(process, &exit_code))
+            *status = -1;
+        else
+            *status = (int)exit_code;
+    }
+    CloseHandle(process);
+    return pid;
+#else
+    return (int)waitpid((pid_t)pid, status, 0);
+#endif
+}
+
+/** 非阻塞检查子进程；尚未结束返回 0，已结束返回 PID，错误返回 -1。 */
+MOONBIT_FFI_EXPORT int moonbit_wm_wait_child_noblock(int pid, int *status)
+{
+#ifdef _WIN32
+    HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!process)
+        return -1;
+    DWORD wait_rc = WaitForSingleObject(process, 0);
+    if (wait_rc == WAIT_TIMEOUT)
+    {
+        CloseHandle(process);
+        return 0;
+    }
+    if (wait_rc != WAIT_OBJECT_0)
+    {
+        CloseHandle(process);
+        return -1;
+    }
+    if (status)
+    {
+        DWORD exit_code = 0;
+        if (!GetExitCodeProcess(process, &exit_code))
+            *status = -1;
+        else
+            *status = (int)exit_code;
+    }
+    CloseHandle(process);
+    return pid;
+#else
+    return (int)waitpid((pid_t)pid, status, WNOHANG);
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_wait_child_noblock_no_status(int pid)
+{
+    return moonbit_wm_wait_child_noblock(pid, NULL);
+}
+
+/** 向子进程发送 SIGTERM。 */
+MOONBIT_FFI_EXPORT int moonbit_wm_kill_child(int pid)
+{
+#ifdef _WIN32
+    HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+    if (!process)
+        return -1;
+    BOOL ok = TerminateProcess(process, 1);
+    CloseHandle(process);
+    return ok ? 0 : -1;
+#else
+    return kill((pid_t)pid, SIGTERM);
+#endif
+}
+
+/** 返回当前进程类型：0 = 主进程，1 = 子进程。 */
+MOONBIT_FFI_EXPORT int moonbit_wm_get_process_type(void)
+{
+    return (int)g_wm.process_type;
+}
+
+/** 返回当前进程 PID。 */
+MOONBIT_FFI_EXPORT int moonbit_wm_get_process_id(void)
+{
+#ifdef _WIN32
+    return (int)GetCurrentProcessId();
+#else
+    return (int)getpid();
+#endif
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MoonBit FFI 导出 —— IPC 通信
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * 发送 IPC 消息（fire-and-forget）。
+ * target_window_id = 0 → 广播给所有已连接的子进程窗口。
+ * 返回 0 成功，-1 失败。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_send(
+    int source_window_id,
+    int target_window_id,
+    int message_type,
+    const char *subtype,
+    const char *data)
+{
+    ipc_message_t msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.source_window_id = source_window_id;
+    msg.target_window_id = target_window_id;
+    msg.message_type = (ipc_msg_type_t)message_type;
+    msg.message_id = alloc_message_id();
+    strncpy(msg.subtype, subtype ? subtype : "", IPC_SUBTYPE_LEN - 1);
+
+    char *buf = NULL;
+    if (data && data[0])
+    {
+        int len = (int)strlen(data);
+        if (len > IPC_MAX_DATA - 1)
+            len = IPC_MAX_DATA - 1;
+        buf = (char *)malloc(len + 1);
+        if (!buf)
+            return -1;
+        memcpy(buf, data, len);
+        buf[len] = '\0';
+        msg.data = buf;
+        msg.data_length = len;
+    }
+
+    int rc = 0;
+
+    if (g_wm.process_type == PROCESS_TYPE_CHILD)
+    {
+        /* 子进程：通过 IPC 客户端发送到主进程 */
+        if (!g_ipc_client.connected || g_ipc_client.socket_fd == IPC_INVALID_SOCKET)
+        {
+            rc = -1;
+        }
+        else
+        {
+            rc = ipc_send(g_ipc_client.socket_fd, &msg);
+        }
+    }
+    else
+    {
+        /* 主进程 */
+        if (target_window_id == 0)
+        {
+            /* 广播 */
+            pthread_mutex_lock(&g_wm.mutex);
+            webview_window_t *w = g_wm.head;
+            while (w)
+            {
+                if (w->ipc_client_fd != IPC_INVALID_SOCKET)
+                    ipc_send(w->ipc_client_fd, &msg);
+                w = w->next;
+            }
+            pthread_mutex_unlock(&g_wm.mutex);
+        }
+        else
+        {
+            pthread_mutex_lock(&g_wm.mutex);
+            webview_window_t *w = find_window(target_window_id);
+            socket_handle_t fd =
+                (w && w->ipc_client_fd != IPC_INVALID_SOCKET) ? w->ipc_client_fd : IPC_INVALID_SOCKET;
+            if (fd == IPC_INVALID_SOCKET && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+                fd = g_remote_window_fds[target_window_id];
+            pthread_mutex_unlock(&g_wm.mutex);
+            rc = (fd != IPC_INVALID_SOCKET) ? ipc_send(fd, &msg) : -1;
+        }
+    }
+
+    free(buf);
+    return rc;
+}
+
+/**
+ * 发送 IPC 请求并同步等待响应（含超时）。
+ * response_buf     — 调用方提供的缓冲区，接收响应数据。
+ * response_buf_len — 缓冲区大小（字节）。
+ * timeout_ms       — 最大等待时间（毫秒）；<=0 表示无限等待。
+ * 返回响应数据字节数，超时或失败返回 -1。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_request(
+    int source_window_id,
+    int target_window_id,
+    const char *subtype,
+    const char *data,
+    char *response_buf,
+    int response_buf_len,
+    int timeout_ms)
+{
+    pthread_mutex_lock(&g_wm.request_mutex);
+
+    ipc_message_t req;
+    memset(&req, 0, sizeof(req));
+    req.source_window_id = source_window_id;
+    req.target_window_id = target_window_id;
+    req.message_type = IPC_MSG_REQUEST;
+    req.message_id = alloc_message_id();
+    strncpy(req.subtype, subtype ? subtype : "", IPC_SUBTYPE_LEN - 1);
+
+    char *buf = NULL;
+    if (data && data[0])
+    {
+        int len = (int)strlen(data);
+        if (len > IPC_MAX_DATA - 1)
+            len = IPC_MAX_DATA - 1;
+        buf = (char *)malloc(len + 1);
+        if (!buf)
+            return -1;
+        memcpy(buf, data, len);
+        buf[len] = '\0';
+        req.data = buf;
+        req.data_length = len;
+    }
+
+    /* 确定发送 fd */
+    socket_handle_t fd = IPC_INVALID_SOCKET;
+    if (g_wm.process_type == PROCESS_TYPE_CHILD)
+    {
+        fd = g_ipc_client.connected ? g_ipc_client.socket_fd : IPC_INVALID_SOCKET;
+    }
+    else
+    {
+        pthread_mutex_lock(&g_wm.mutex);
+        webview_window_t *w = find_window(target_window_id);
+        fd = (w && w->ipc_client_fd != IPC_INVALID_SOCKET) ? w->ipc_client_fd : IPC_INVALID_SOCKET;
+        if (fd == IPC_INVALID_SOCKET && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+            fd = g_remote_window_fds[target_window_id];
+        pthread_mutex_unlock(&g_wm.mutex);
+    }
+
+    if (fd == IPC_INVALID_SOCKET)
+    {
+        free(buf);
+        pthread_mutex_unlock(&g_wm.request_mutex);
+        return -1;
+    }
+
+    /* 注册等待槽 */
+    ipc_message_t response;
+    memset(&response, 0, sizeof(response));
+
+    pthread_mutex_lock(&g_wm.response_mutex);
+    g_wm.pending_response = &response;
+    g_wm.pending_msg_id = req.message_id;
+
+    /* 发送请求 */
+    if (ipc_send(fd, &req) < 0)
+    {
+        g_wm.pending_response = NULL;
+        g_wm.pending_msg_id = -1;
+        pthread_mutex_unlock(&g_wm.response_mutex);
+        free(buf);
+        pthread_mutex_unlock(&g_wm.request_mutex);
+        return -1;
+    }
+    free(buf);
+
+    /* 等待响应 */
+    int wait_rc = 0;
+    if (timeout_ms > 0)
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += timeout_ms / 1000;
+        ts.tv_nsec += (timeout_ms % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L)
+        {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000L;
+        }
+
+        while (response.message_id != req.message_id && wait_rc == 0)
+        {
+            wait_rc = pthread_cond_timedwait(&g_wm.response_cond,
+                                             &g_wm.response_mutex, &ts);
+        }
+    }
+    else
+    {
+        while (response.message_id != req.message_id)
+        {
+            pthread_cond_wait(&g_wm.response_cond, &g_wm.response_mutex);
+        }
+    }
+
+    g_wm.pending_response = NULL;
+    g_wm.pending_msg_id = -1;
+    pthread_mutex_unlock(&g_wm.response_mutex);
+
+    if (wait_rc != 0 || response.message_id != req.message_id)
+    {
+        ipc_message_free(&response);
+        pthread_mutex_unlock(&g_wm.request_mutex);
+        return -1; /* 超时或中断 */
+    }
+
+    /* 复制响应数据 */
+    int copy_len = 0;
+    if (response.data && response.data_length > 0 &&
+        response_buf && response_buf_len > 0)
+    {
+        copy_len = response.data_length < response_buf_len - 1
+                       ? response.data_length
+                       : response_buf_len - 1;
+        memcpy(response_buf, response.data, copy_len);
+        response_buf[copy_len] = '\0';
+    }
+
+    ipc_message_free(&response);
+    pthread_mutex_unlock(&g_wm.request_mutex);
+    return copy_len;
+}
+
+MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_request_bytes(
+    int source_window_id,
+    int target_window_id,
+    const char *subtype,
+    const char *data,
+    int timeout_ms)
+{
+    char response_buf[IPC_MAX_DATA + 1];
+    int len = moonbit_wm_ipc_request(
+        source_window_id,
+        target_window_id,
+        subtype,
+        data,
+        response_buf,
+        sizeof(response_buf),
+        timeout_ms);
+    if (len <= 0)
+        return moonbit_make_bytes_raw(0);
+    moonbit_bytes_t result = moonbit_make_bytes_raw((int32_t)len);
+    memcpy(result, response_buf, (size_t)len);
+    return result;
+}
+
+/**
+ * 发送 IPC 响应（将 request_id 原样填入 message_id，供请求方匹配）。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_respond(
+    int source_window_id,
+    int target_window_id,
+    int request_id,
+    const char *data)
+{
+    ipc_message_t msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.source_window_id = source_window_id;
+    msg.target_window_id = target_window_id;
+    msg.message_type = IPC_MSG_RESPONSE;
+    msg.message_id = request_id;
+    strncpy(msg.subtype, "response", IPC_SUBTYPE_LEN - 1);
+
+    char *buf = NULL;
+    if (data && data[0])
+    {
+        int len = (int)strlen(data);
+        if (len > IPC_MAX_DATA - 1)
+            len = IPC_MAX_DATA - 1;
+        buf = (char *)malloc(len + 1);
+        if (!buf)
+            return -1;
+        memcpy(buf, data, len);
+        buf[len] = '\0';
+        msg.data = buf;
+        msg.data_length = len;
+    }
+
+    int rc = 0;
+    if (g_wm.process_type == PROCESS_TYPE_CHILD)
+    {
+        rc = (g_ipc_client.connected && g_ipc_client.socket_fd != IPC_INVALID_SOCKET)
+                 ? ipc_send(g_ipc_client.socket_fd, &msg)
+                 : -1;
+    }
+    else
+    {
+        pthread_mutex_lock(&g_wm.mutex);
+        webview_window_t *w = find_window(target_window_id);
+        socket_handle_t fd =
+            (w && w->ipc_client_fd != IPC_INVALID_SOCKET) ? w->ipc_client_fd : IPC_INVALID_SOCKET;
+        if (fd == IPC_INVALID_SOCKET && target_window_id >= 0 && target_window_id < g_remote_window_fds_capacity)
+            fd = g_remote_window_fds[target_window_id];
+        pthread_mutex_unlock(&g_wm.mutex);
+        rc = (fd != IPC_INVALID_SOCKET) ? ipc_send(fd, &msg) : -1;
+    }
+
+    free(buf);
+    return rc;
+}
+
+/**
+ * 设置全局 IPC 消息回调（message 在回调返回后被释放，不得保留指针）。
+ * callback 为 NULL 表示清除。
+ */
+MOONBIT_FFI_EXPORT void moonbit_wm_set_ipc_callback(
+    void (*callback)(ipc_message_t *))
+{
+    g_wm.on_ipc_message = callback;
+}
+
+/**
+ * 设置窗口创建/销毁全局回调。
+ */
+MOONBIT_FFI_EXPORT void moonbit_wm_set_window_callbacks(
+    void (*on_created)(webview_window_t *),
+    void (*on_destroyed)(int32_t))
+{
+    g_wm.on_window_created = on_created;
+    g_wm.on_window_destroyed = on_destroyed;
+}
+
+/**
+ * 设置窗口事件回调（仅对指定 window_id 有效）。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_set_window_event_callback(
+    int window_id,
+    void (*on_event)(webview_window_t *, window_evt_t, void *))
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    if (w)
+        w->on_event = on_event;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return w ? 0 : -1;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MoonBit FFI 导出 —— 窗口管理器查询
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * 获取指定窗口的 webview_t 句柄（供 binding.mbt 中未封装的 C API 调用）。
+ * 返回句柄地址（int64 截断），未找到返回 0。
+ */
+MOONBIT_FFI_EXPORT void *moonbit_wm_get_handle(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    void *h = w ? (void *)w->handle : NULL;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return h;
+}
+
+/**
+ * 获取窗口状态：0=CREATED, 1=RUNNING, 2=HIDDEN, 3=CLOSING, 4=CLOSED。
+ * 未找到返回 -1。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_get_window_state(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    int s = w ? (int)w->state : -1;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return s;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   原有 FFI 兼容层 —— binding.mbt 所需函数（保持不变）
+   ════════════════════════════════════════════════════════════════ */
 
 /*
  * MoonBit passes closures as (trampoline FuncRef, closure data) pairs.
@@ -16,97 +2366,461 @@ typedef void *webview_t;
  */
 typedef void (*moonbit_webview_bind_callback_t)(void *seq, void *req, void *arg);
 
-struct moonbit_webview_binding {
-  moonbit_webview_bind_callback_t callback;
-  void *arg; /* owned MoonBit closure; must moonbit_decref on free */
-};
+typedef struct
+{
+    moonbit_webview_bind_callback_t callback;
+    void *arg; /* owned MoonBit closure; must moonbit_decref on free */
+} moonbit_webview_binding;
 
-/* Forward declarations from webview.h — only the symbols we need. */
-int webview_bind(
-  webview_t w,
-  const char *name,
-  void (*fn)(const char *seq, const char *req, void *arg),
-  void *arg
-);
-int webview_unbind(webview_t w, const char *name);
-int webview_return(webview_t w, const char *seq, int status, const char *result);
-
-static void moonbit_webview_free_binding(struct moonbit_webview_binding *binding) {
-  if (binding == NULL) return;
-  if (binding->arg != NULL) moonbit_decref(binding->arg);
-  free(binding);
-}
-
+/* webview_bind 回调蹦床：将 C 回调适配为 MoonBit closure 调用 */
 static void moonbit_webview_bind_trampoline(
-  const char *seq,
-  const char *req,
-  void *arg
-) {
-  struct moonbit_webview_binding *binding = arg;
-  /* Pass raw C-string pointers directly — zero copy.
-   * The MoonBit closure (webview.mbt::bind) copies them via
-   * webview_copy_cstr before the callback returns, so the pointers
-   * are valid for the duration of this call. */
-  binding->callback((void *)seq, (void *)req, binding->arg);
+    const char *seq,
+    const char *req,
+    void *arg)
+{
+    moonbit_webview_binding *binding = (moonbit_webview_binding *)arg;
+    if (!binding || !binding->callback)
+        return;
+
+    /*
+     * Pass raw C string pointers. MoonBit side performs copying via
+     * webview_copy_cstr(raw_id/raw_req) immediately inside bind callback.
+     */
+    binding->callback((void *)seq, (void *)req, binding->arg);
 }
 
-MOONBIT_FFI_EXPORT
-void *moonbit_webview_bind(
-  webview_t w,
-  const char *name,
-  moonbit_webview_bind_callback_t fn,
-  void *arg  /* #owned: MoonBit transferred ownership to us */
-) {
-  struct moonbit_webview_binding *binding =
-    (struct moonbit_webview_binding *)malloc(sizeof(struct moonbit_webview_binding));
-  if (binding == NULL) {
-    /* Allocation failed — decref the transferred closure to avoid a leak. */
-    if (arg != NULL) moonbit_decref(arg);
-    return NULL;
-  }
-  binding->callback = fn;
-  binding->arg = arg;
-
-  if (webview_bind(w, name, moonbit_webview_bind_trampoline, binding) != 0) {
-    moonbit_webview_free_binding(binding);
-    return NULL;
-  }
-  return binding;
-}
-
-MOONBIT_FFI_EXPORT
-void moonbit_webview_unbind(webview_t w, const char *name, void *raw_binding) {
-  webview_unbind(w, name);
-  moonbit_webview_free_binding((struct moonbit_webview_binding *)raw_binding);
-}
-
-/* ── webview_return zero-copy variant ───────────────────────────────────── */
-
-/*
- * Respond to a binding call using the raw seq pointer received in the
- * trampoline callback.  seq is valid for the duration of the callback; we
- * pass it straight to webview_return without copying it into MoonBit's heap.
- * result is a MoonBit Bytes value (null-terminated by the runtime), so it can
- * be cast directly to const char*.
- *
- * This saves 2 moonbit_webview_copy_cstr allocations + 2 UTF-8 decode/encode
- * roundtrips compared to routing seq through the MoonBit string system.
+/**
+ * 将 MoonBit closure 绑定到指定 JS 函数名。
+ * 返回 binding 指针（不透明句柄），供 moonbit_webview_unbind 使用。
  */
-MOONBIT_FFI_EXPORT
-void moonbit_webview_return_raw(
-  webview_t w,
-  const char *seq,   /* #borrow: raw C pointer, not a MoonBit object */
-  int32_t status,
-  const char *result /* #borrow: MoonBit Bytes, null-terminated by runtime */
-) {
-  webview_return(w, seq, (int)status, result);
+MOONBIT_FFI_EXPORT void *moonbit_webview_bind(
+    webview_t w,
+    const char *name,
+    moonbit_webview_bind_callback_t fn,
+    void *arg /* #owned: MoonBit transferred ownership to C side */)
+{
+    moonbit_webview_binding *binding =
+        (moonbit_webview_binding *)malloc(sizeof(moonbit_webview_binding));
+    if (!binding)
+    {
+        if (arg)
+            moonbit_decref(arg);
+        return NULL;
+    }
+
+    binding->callback = fn;
+    binding->arg = arg;
+
+    webview_bind(w, name, moonbit_webview_bind_trampoline, binding);
+    return binding;
 }
 
-/* ── Misc helpers ────────────────────────────────────────────────────────── */
+/**
+ * 解绑 JS 函数并释放 binding 结构。
+ */
+MOONBIT_FFI_EXPORT void moonbit_webview_unbind(
+    webview_t w,
+    const char *name,
+    void *binding_ptr)
+{
+    webview_unbind(w, name);
+    if (binding_ptr)
+    {
+        moonbit_webview_binding *binding = (moonbit_webview_binding *)binding_ptr;
+        if (binding->arg)
+            moonbit_decref(binding->arg);
+        free(binding);
+    }
+}
 
-MOONBIT_FFI_EXPORT
-int64_t moonbit_webview_identity(webview_t w) {
-  return (int64_t)(intptr_t)w;
+MOONBIT_FFI_EXPORT int moonbit_run_in_background_thread(
+    moonbit_thread_closure_t fn,
+    void *arg)
+{
+    moonbit_thread_task_t *task =
+        (moonbit_thread_task_t *)malloc(sizeof(moonbit_thread_task_t));
+    if (!task)
+    {
+        if (arg)
+            moonbit_decref(arg);
+        return -1;
+    }
+    task->callback = fn;
+    task->arg = arg;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, moonbit_background_thread_main, task) != 0)
+    {
+        if (arg)
+            moonbit_decref(arg);
+        free(task);
+        return -1;
+    }
+    pthread_detach(thread);
+    return 0;
+}
+
+/**
+ * 返回 webview_t 的整数标识（用作全局 PluginHost 注册表的键）。
+ */
+MOONBIT_FFI_EXPORT int64_t moonbit_webview_identity(webview_t w)
+{
+    return (int64_t)(intptr_t)w;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   窗口管理器感知的 webview 生命周期包装
+   （供 webview.mbt 的 WebView::new / WebView::destroy 使用）
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * 创建 webview 实例并同时在窗口管理器中注册。
+ * 返回 webview_t 句柄（作为 Int64 返回给 MoonBit）。
+ */
+MOONBIT_FFI_EXPORT int64_t moonbit_webview_create_managed(
+    int debug,
+    const char *title,
+    int width,
+    int height)
+{
+    if (!g_wm.initialized)
+        moonbit_wm_init(1);
+
+    int wid = moonbit_wm_create_window(title, NULL, width, height,
+                                       0, 0, 0, debug, -1);
+    if (wid < 0)
+        return 0LL;
+
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(wid);
+    int64_t handle = w ? (int64_t)w->handle : 0LL;
+    pthread_mutex_unlock(&g_wm.mutex);
+    return handle;
+}
+
+/**
+ * 销毁 webview 实例并同时从窗口管理器移除。
+ * window_id 为 moonbit_wm_create_window 返回值；
+ * 若不使用托管创建，则直接调用 webview_destroy(handle)。
+ */
+MOONBIT_FFI_EXPORT void moonbit_webview_destroy_managed(int window_id)
+{
+    moonbit_wm_destroy_window(window_id);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   辅助：窗口 dispatch（跨线程安全调用 webview API）
+   ════════════════════════════════════════════════════════════════ */
+
+typedef struct
+{
+    void (*fn)(webview_t, void *);
+    void *arg;
+} dispatch_ctx_t;
+
+static void dispatch_trampoline(webview_t w, void *arg)
+{
+    dispatch_ctx_t *ctx = (dispatch_ctx_t *)arg;
+    ctx->fn(w, ctx->arg);
+    free(ctx);
+}
+
+/**
+ * 线程安全地向指定窗口的事件循环分派任务。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_dispatch(
+    int window_id,
+    void (*fn)(webview_t, void *),
+    void *arg)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    webview_t handle = w ? w->handle : NULL;
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!handle)
+        return -1;
+
+    dispatch_ctx_t *ctx = (dispatch_ctx_t *)malloc(sizeof(dispatch_ctx_t));
+    if (!ctx)
+        return -1;
+    ctx->fn = fn;
+    ctx->arg = arg;
+    webview_dispatch(handle, dispatch_trampoline, ctx);
+    return 0;
+}
+
+/* ─── IPC 消息发送（binding.mbt 接口） ─────────────────────────── */
+
+/**
+ * 向指定窗口发送带类型的 IPC 消息。
+ * message_type / message_data 为 MoonBit Bytes（以 null 终止的 UTF-8）。
+ */
+MOONBIT_FFI_EXPORT int moonbit_webview_send_message(
+    int source_window_id,
+    int target_window_id,
+    const char *message_type,
+    const char *message_data)
+{
+    return moonbit_wm_ipc_send(
+        source_window_id,
+        target_window_id,
+        IPC_MSG_DATA,
+        message_type,
+        message_data);
+}
+
+/**
+ * 向所有其他窗口广播消息（target_window_id = 0）。
+ */
+MOONBIT_FFI_EXPORT int moonbit_webview_broadcast_message(
+    int source_window_id,
+    const char *message_type,
+    const char *message_data)
+{
+    return moonbit_wm_ipc_send(
+        source_window_id,
+        0, /* 0 = 广播 */
+        IPC_MSG_DATA,
+        message_type,
+        message_data);
+}
+
+/* ─── IPC 消息接收（供 MoonBit 轮询） ─────────────────────────────── */
+
+/* 每个窗口的 IPC 接收队列（单条消息缓冲） */
+typedef struct ipc_recv_node
+{
+    ipc_message_t msg;
+    struct ipc_recv_node *next;
+} ipc_recv_node_t;
+
+typedef struct
+{
+    ipc_recv_node_t *head;
+    ipc_recv_node_t *tail;
+    pthread_mutex_t mutex;
+} ipc_recv_queue_t;
+
+static ipc_recv_queue_t *g_recv_queue = NULL;
+static int g_recv_queue_capacity = 0;
+static pthread_mutex_t g_recv_queues_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static ipc_recv_queue_t *get_recv_queue(int window_id)
+{
+    pthread_mutex_lock(&g_recv_queues_mutex);
+    if (window_id < 0 || window_id >= g_recv_queue_capacity || !g_recv_queue)
+    {
+        pthread_mutex_unlock(&g_recv_queues_mutex);
+        return NULL;
+    }
+    pthread_mutex_unlock(&g_recv_queues_mutex);
+    return &g_recv_queue[window_id];
+}
+
+static void ensure_recv_queues(void)
+{
+    pthread_mutex_lock(&g_recv_queues_mutex);
+    if (g_recv_queue_capacity < g_wm.next_window_id + 17)
+    {
+        int new_cap = g_recv_queue_capacity == 0 ? 32 : g_recv_queue_capacity * 2;
+        if (new_cap < g_wm.next_window_id + 17)
+            new_cap = g_wm.next_window_id + 17;
+        ipc_recv_queue_t *new_q =
+            (ipc_recv_queue_t *)realloc(g_recv_queue, new_cap * sizeof(ipc_recv_queue_t));
+        if (new_q)
+        {
+            for (int i = g_recv_queue_capacity; i < new_cap; i++)
+            {
+                memset(&new_q[i], 0, sizeof(ipc_recv_queue_t));
+                pthread_mutex_init(&new_q[i].mutex, NULL);
+            }
+            g_recv_queue = new_q;
+            g_recv_queue_capacity = new_cap;
+        }
+    }
+    pthread_mutex_unlock(&g_recv_queues_mutex);
+}
+
+/* IPC 消息回调：将消息放入窗口的接收队列 */
+static void ipc_recv_callback(ipc_message_t *msg)
+{
+    if (msg->target_window_id < 0)
+        return;
+    ipc_recv_queue_t *q = get_recv_queue(msg->target_window_id);
+    if (!q)
+        return;
+    ipc_recv_node_t *node = (ipc_recv_node_t *)calloc(1, sizeof(ipc_recv_node_t));
+    if (!node)
+        return;
+    node->msg.source_window_id = msg->source_window_id;
+    node->msg.target_window_id = msg->target_window_id;
+    node->msg.message_type = msg->message_type;
+    node->msg.message_id = msg->message_id;
+    strncpy(node->msg.subtype, msg->subtype, IPC_SUBTYPE_LEN - 1);
+    if (msg->data && msg->data_length > 0)
+    {
+        node->msg.data = (char *)malloc((size_t)msg->data_length + 1);
+        if (!node->msg.data)
+        {
+            free(node);
+            return;
+        }
+        memcpy(node->msg.data, msg->data, (size_t)msg->data_length);
+        node->msg.data[msg->data_length] = '\0';
+        node->msg.data_length = msg->data_length;
+    }
+    pthread_mutex_lock(&q->mutex);
+    if (!q->tail)
+    {
+        q->head = q->tail = node;
+    }
+    else
+    {
+        q->tail->next = node;
+        q->tail = node;
+    }
+    pthread_mutex_unlock(&q->mutex);
+}
+
+/**
+ * 非阻塞检查是否有 IPC 消息等待指定窗口。
+ * 返回消息字节数（>0），无可用消息返回 0。
+ */
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_recv(int window_id)
+{
+    ensure_recv_queues();
+    ipc_recv_queue_t *q = get_recv_queue(window_id);
+    if (!q)
+        return 0;
+    pthread_mutex_lock(&q->mutex);
+    int result = (q->head && q->head->msg.data) ? (int)q->head->msg.data_length : (q->head ? 1 : 0);
+    pthread_mutex_unlock(&q->mutex);
+    return result;
+}
+
+MOONBIT_FFI_EXPORT void *moonbit_wm_ipc_pop_message(int window_id)
+{
+    ensure_recv_queues();
+    ipc_recv_queue_t *q = get_recv_queue(window_id);
+    if (!q)
+        return NULL;
+
+    pthread_mutex_lock(&q->mutex);
+    if (!q->head)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return NULL;
+    }
+    ipc_recv_node_t *node = q->head;
+    q->head = node->next;
+    if (!q->head)
+        q->tail = NULL;
+    pthread_mutex_unlock(&q->mutex);
+
+    ipc_message_t *msg = (ipc_message_t *)calloc(1, sizeof(ipc_message_t));
+    if (!msg)
+    {
+        ipc_message_free(&node->msg);
+        free(node);
+        return NULL;
+    }
+    *msg = node->msg;
+    free(node);
+    return msg;
+}
+
+MOONBIT_FFI_EXPORT void moonbit_wm_ipc_message_free(void *message)
+{
+    if (!message)
+        return;
+    ipc_message_t *msg = (ipc_message_t *)message;
+    ipc_message_free(msg);
+    free(msg);
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_message_source_window_id(void *message)
+{
+    return message ? ((ipc_message_t *)message)->source_window_id : 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_message_target_window_id(void *message)
+{
+    return message ? ((ipc_message_t *)message)->target_window_id : 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_message_type(void *message)
+{
+    return message ? (int)((ipc_message_t *)message)->message_type : 0;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_ipc_message_id(void *message)
+{
+    return message ? ((ipc_message_t *)message)->message_id : 0;
+}
+
+MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_message_subtype(void *message)
+{
+    ipc_message_t *msg = (ipc_message_t *)message;
+    const char *subtype = msg ? msg->subtype : "";
+    size_t len = strlen(subtype);
+    moonbit_bytes_t result = moonbit_make_bytes_raw((int32_t)len);
+    if (len > 0)
+        memcpy(result, subtype, len);
+    return result;
+}
+
+MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_message_data(void *message)
+{
+    ipc_message_t *msg = (ipc_message_t *)message;
+    int32_t len = (msg && msg->data) ? msg->data_length : 0;
+    moonbit_bytes_t result = moonbit_make_bytes_raw(len);
+    if (len > 0)
+        memcpy(result, msg->data, (size_t)len);
+    return result;
+}
+
+/**
+ * 获取最后一条 IPC 消息。
+ * 返回 (message_type, subtype, data) 元组。
+ * 调用前应先用 moonbit_wm_ipc_recv 确认有消息。
+ */
+MOONBIT_FFI_EXPORT moonbit_bytes_t moonbit_wm_ipc_get_message(
+    int window_id)
+{
+    /* 返回编码为 moonbit_bytes_t：message_type|subtype|null|data */
+    /* 这是一个简化实现，返回格式化的字符串 */
+    static THREAD_LOCAL char static_buf[8192];
+    static_buf[0] = '\0';
+
+    ipc_recv_queue_t *q = get_recv_queue(window_id);
+    if (!q)
+        return moonbit_make_bytes_raw(0);
+
+    pthread_mutex_lock(&q->mutex);
+    if (!q->head)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return moonbit_make_bytes_raw(0);
+    }
+    ipc_recv_node_t *node = q->head;
+    q->head = node->next;
+    if (!q->head)
+        q->tail = NULL;
+    pthread_mutex_unlock(&q->mutex);
+
+    /* 构建返回数据 */
+    snprintf(static_buf, sizeof(static_buf),
+             "%d|%s|%s",
+             (int)node->msg.message_type,
+             node->msg.subtype,
+             node->msg.data ? node->msg.data : "");
+
+    size_t len = strlen(static_buf);
+    moonbit_bytes_t result = moonbit_make_bytes_raw((int32_t)len);
+    memcpy(result, static_buf, len);
+    ipc_message_free(&node->msg);
+    free(node);
+    return result;
 }
 
 /*
@@ -120,12 +2834,37 @@ int64_t moonbit_webview_identity(webview_t w) {
  * The bytes do NOT include a null terminator — MoonBit Bytes are length-
  * prefixed and the null is added by the runtime when passing back to C.
  */
+
+
+/**
+ * Thin wrapper around webview_return for MoonBit FFI.
+ * `seq` and `result` are borrowed null-terminated C strings.
+ */
+MOONBIT_FFI_EXPORT void moonbit_webview_return_raw(
+    webview_t w,
+    const char *seq,
+    int status,
+    const char *result)
+{
+    webview_return(w, seq, status, result);
+}
+
+/**
+ * Thin wrapper around webview_terminate for MoonBit FFI.
+ */
+MOONBIT_FFI_EXPORT void moonbit_webview_terminate(webview_t w)
+{
+    webview_terminate(w);
+}
 MOONBIT_FFI_EXPORT
-moonbit_bytes_t moonbit_webview_copy_cstr(const char *cstr) {
-  if (cstr == NULL) return moonbit_make_bytes_raw(0);
-  size_t len = strlen(cstr);
-  if (len > INT32_MAX) abort();
-  moonbit_bytes_t bytes = moonbit_make_bytes_raw((int32_t)len);
-  memcpy(bytes, cstr, len);
-  return bytes;
+moonbit_bytes_t moonbit_webview_copy_cstr(const char *cstr)
+{
+    if (cstr == NULL)
+        return moonbit_make_bytes_raw(0);
+    size_t len = strlen(cstr);
+    if (len > INT32_MAX)
+        abort();
+    moonbit_bytes_t bytes = moonbit_make_bytes_raw((int32_t)len);
+    memcpy(bytes, cstr, len);
+    return bytes;
 }

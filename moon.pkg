@@ -1,24 +1,20 @@
 import {
   "moonbitlang/core/json",
   "moonbitlang/core/encoding/utf8" @encoding/utf8,
+  "moonbitlang/async" @async,
+  "moonbitlang/x/sys" @sys,
 }
 
 supported_targets = "+native"
 
 options(
-  link: {
-    "native": {
-      // MacOS / Linux
-      "cc-link-flags": "-Llib -lwebview -Wl,-rpath,lib",
-      // Windows
-      // "cc-link-flags": "lib/webview.lib",
-    },
-  },
   "native-stub": [ "stub.c" ],
   targets: {
     "binding.mbt": [ "native" ],
     "command.mbt": [ "native" ],
+    "managed_app.mbt": [ "native" ],
     "plugin.mbt": [ "native" ],
+    "process_bridge.mbt": [ "native" ],
     "webview.mbt": [ "native" ],
   },
 )
