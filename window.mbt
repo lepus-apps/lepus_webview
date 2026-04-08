@@ -10,11 +10,13 @@ pub struct Window {
   child_arg : String
   mut frameless : Bool
   mut resizable : Bool
+  mut closeable : Bool
   mut always_on_top : Bool
   mut transparent : Bool
   mut title_bar_style : TitleBarStyle
   mut title_bar_overlay : Bool
   mut traffic_light_position : TrafficLightPosition
+  enable_window_controls_plugin : Bool
   mut url : String
   mut html : String
   mut runtime_window_id : Int
@@ -34,11 +36,13 @@ pub fn Window::new(
   child_arg? : String = "--moonbit-webview-child",
   frameless? : Bool = false,
   resizable? : Bool = true,
+  closeable? : Bool = true,
   always_on_top? : Bool = false,
   transparent? : Bool = false,
   title_bar_style? : TitleBarStyle = TitleBarStyle::Default,
   title_bar_overlay? : Bool = false,
   traffic_light_position? : TrafficLightPosition = { x: -1, y: -1 },
+  enable_window_controls_plugin? : Bool = true,
 ) -> Window {
   {
     title,
@@ -49,11 +53,13 @@ pub fn Window::new(
     child_arg,
     frameless,
     resizable,
+    closeable,
     always_on_top,
     transparent,
     title_bar_style,
     title_bar_overlay,
     traffic_light_position,
+    enable_window_controls_plugin,
     html: "",
     runtime_window_id: -1,
     plugins: [],
@@ -67,6 +73,7 @@ pub fn Window::set_window_customization(
   self : Window,
   frameless : Bool,
   resizable : Bool,
+  closeable : Bool,
   always_on_top : Bool,
   transparent : Bool,
   title_bar_style : TitleBarStyle,
@@ -74,6 +81,7 @@ pub fn Window::set_window_customization(
 ) -> Unit {
   self.frameless = frameless
   self.resizable = resizable
+  self.closeable = closeable
   self.always_on_top = always_on_top
   self.transparent = transparent
   self.title_bar_style = title_bar_style
@@ -88,6 +96,11 @@ pub fn Window::set_window_customization(
           0
         },
         if resizable {
+          1
+        } else {
+          0
+        },
+        if closeable {
           1
         } else {
           0
@@ -182,6 +195,7 @@ async fn Window::run_child_async(self : Window) -> Unit {
       debug=self.debug,
       frameless=self.frameless,
       resizable=self.resizable,
+      closeable=self.closeable,
       always_on_top=self.always_on_top,
       transparent=self.transparent,
       title_bar_style=self.title_bar_style,
@@ -360,7 +374,9 @@ fn Window::install_child_plugins(
 ) -> Unit {
   let proxy = ProcessCommandProxy::new(wm, webview.window_id())
   let host = PluginHost::new(webview)
-  host.install(self.window_controls_plugin(webview.window_id()))
+  if self.enable_window_controls_plugin {
+    host.install(self.window_controls_plugin(webview.window_id()))
+  }
   for plugin in self.plugins {
     host.install(plugin, proxy=Some(proxy))
   }

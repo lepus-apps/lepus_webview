@@ -1551,6 +1551,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     int window_id,
     int frameless,
     int resizable,
+    int closeable,
     int always_on_top,
     int transparent,
     int title_bar_style,
@@ -1572,6 +1573,10 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
         style &= ~(WS_CAPTION | WS_THICKFRAME);
     else
         style |= WS_CAPTION;
+    if (closeable)
+        style |= WS_SYSMENU;
+    else
+        style &= ~WS_SYSMENU;
     if (resizable)
         style |= (WS_THICKFRAME | WS_MAXIMIZEBOX);
     else
@@ -1614,19 +1619,23 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
     const unsigned long NSWindowStyleMaskFullSizeContentView = 1UL << 15;
     if (hidden_title_bar)
     {
-        style |= (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
+        style |= (NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable);
         style |= NSWindowStyleMaskFullSizeContentView;
     }
     else if (frameless)
     {
-        style &= ~(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
+        style &= ~(NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable);
         style |= NSWindowStyleMaskFullSizeContentView;
     }
     else
     {
-        style |= (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
+        style |= (NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable);
         style &= ~NSWindowStyleMaskFullSizeContentView;
     }
+    if (closeable)
+        style |= NSWindowStyleMaskClosable;
+    else
+        style &= ~NSWindowStyleMaskClosable;
     if (resizable)
         style |= NSWindowStyleMaskResizable;
     else
@@ -1686,6 +1695,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
 #else
     (void)frameless;
     (void)resizable;
+    (void)closeable;
     (void)always_on_top;
     (void)transparent;
     (void)title_bar_style;
@@ -1958,7 +1968,14 @@ MOONBIT_FFI_EXPORT int moonbit_wm_close_window(int window_id)
     void *msgsend = moonbit_objc_msgsend_symbol();
     if (!ns_window || !msgsend)
         return -1;
-    ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, moonbit_sel_register_name("performClose:"), (mb_id_t)ns_window);
+    mb_sel_t sel_close = moonbit_sel_register_name("close");
+    mb_sel_t sel_perform_close = moonbit_sel_register_name("performClose:");
+    if (sel_close)
+        ((mb_objc_msgsend_u64_t)msgsend)((mb_id_t)ns_window, sel_close);
+    else if (sel_perform_close)
+        ((mb_objc_msgsend_id_arg_t)msgsend)((mb_id_t)ns_window, sel_perform_close, (mb_id_t)ns_window);
+    else
+        return -1;
     return 0;
 #else
     return moonbit_wm_terminate_window(window_id);

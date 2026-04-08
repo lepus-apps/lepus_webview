@@ -194,6 +194,7 @@ pub fn WindowManager::set_window_customization(
   window_id : Int,
   frameless : Bool,
   resizable : Bool,
+  closeable : Bool,
   always_on_top : Bool,
   transparent : Bool,
   title_bar_style : TitleBarStyle,
@@ -207,6 +208,11 @@ pub fn WindowManager::set_window_customization(
       0
     },
     if resizable {
+      1
+    } else {
+      0
+    },
+    if closeable {
       1
     } else {
       0

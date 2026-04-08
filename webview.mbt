@@ -76,6 +76,7 @@ fn[X] WebView::new_managed(
   debug? : Int = 0,
   frameless? : Bool = false,
   resizable? : Bool = true,
+  closeable? : Bool = true,
   always_on_top? : Bool = false,
   transparent? : Bool = false,
   title_bar_style? : TitleBarStyle = Default,
@@ -109,6 +110,11 @@ fn[X] WebView::new_managed(
         0
       },
       if resizable {
+        1
+      } else {
+        0
+      },
+      if closeable {
         1
       } else {
         0
@@ -270,6 +276,7 @@ pub fn[X] WebView::set_window_customization(
   self : WebView[X],
   frameless : Bool,
   resizable : Bool,
+  closeable : Bool,
   always_on_top : Bool,
   transparent : Bool,
   title_bar_style : TitleBarStyle,
@@ -284,6 +291,11 @@ pub fn[X] WebView::set_window_customization(
         0
       },
       if resizable {
+        1
+      } else {
+        0
+      },
+      if closeable {
         1
       } else {
         0
