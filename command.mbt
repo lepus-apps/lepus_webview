@@ -52,7 +52,7 @@ struct CommandBridge[X] {
 /// Creates and starts a command bridge for the given webview.
 fn[X] CommandBridge::new(
   webview : WebView[X],
-  global_name? : String = "MoonBitBridge",
+  global_name? : String = "lepusBridge",
   binding_name? : String = "__moonbit_command",
 ) -> CommandBridge[X] {
   let bridge = CommandBridge::{ webview, binding_name, handlers: {} }

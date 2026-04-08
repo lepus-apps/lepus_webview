@@ -24,6 +24,7 @@ fn main {
     frameless=true,
     title_bar_style=Hidden,
     title_bar_overlay=true,
+    devtools=true,
     debug=1,
   )
   window.install(
@@ -75,16 +76,16 @@ fn main {
       #|  <p id="sum-result">Result: </p>
       #|</div>
       #|<script>
-      #|  window.MoonBitPlugins.math.sum({ left: 1, right: 1 });
-      #|  window.MoonBitPlugins.math.sum_async({ left: 10, right: 20 });
+      #|  window.lepusApi.math.sum({ left: 1, right: 1 });
+      #|  window.lepusApi.math.sum_async({ left: 10, right: 20 });
       #|  document.getElementById("sum-btn").addEventListener("click", async () => {
       #|    try {
       #|      document.getElementById("sum-result").textContent = "Calculating..."
-      #|      const result = await window.MoonBitPlugins.math.sum_async({ left: 2, right: 3 });
-      #|      window.MoonBitPlugins.console.log("[example] sum result: " + JSON.stringify(result));
+      #|      const result = await window.lepusApi.math.sum_async({ left: 2, right: 3 });
+      #|      window.lepusApi.console.log("[example] sum result: " + JSON.stringify(result));
       #|      document.getElementById("sum-result").textContent = "Result: " + result.total;
       #|    } catch(e) {
-      #|      window.MoonBitPlugins.console.error("[example] sum error: " + e.message);
+      #|      window.lepusApi.console.error("[example] sum error: " + e.message);
       #|      document.getElementById("sum-result").textContent = "Error: " + e.message;
       #|    }
       #|  });

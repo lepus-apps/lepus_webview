@@ -7,6 +7,7 @@ pub struct Window {
   height : Int
   size_hint : SizeHint
   debug : Int
+  devtools : Bool
   child_arg : String
   mut frameless : Bool
   mut resizable : Bool
@@ -33,6 +34,7 @@ pub fn Window::new(
   height? : Int = 600,
   size_hint? : SizeHint = SizeHint::None,
   debug? : Int = 0,
+  devtools? : Bool = false,
   child_arg? : String = "--moonbit-webview-child",
   frameless? : Bool = false,
   resizable? : Bool = true,
@@ -50,6 +52,7 @@ pub fn Window::new(
     width,
     height,
     debug,
+    devtools,
     child_arg,
     frameless,
     resizable,
@@ -193,6 +196,7 @@ async fn Window::run_child_async(self : Window) -> Unit {
       width=self.width,
       height=self.height,
       debug=self.debug,
+      devtools=self.devtools,
       frameless=self.frameless,
       resizable=self.resizable,
       closeable=self.closeable,
@@ -254,7 +258,7 @@ fn Window::window_controls_plugin(_self : Window, window_id : Int) -> Plugin {
         #|(() => {
         #|  if (window.__LEPUS_WINDOW_CONTROL_READY__) return;
         #|  const call = (name) => {
-        #|    const api = window.MoonBitPlugins?.window_controls?.[name];
+        #|    const api = window.lepusApi?.window_controls?.[name];
         #|    if (typeof api !== 'function') return Promise.resolve(false);
         #|    return api(null).catch(() => false);
         #|  };

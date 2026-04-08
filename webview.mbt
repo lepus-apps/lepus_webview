@@ -74,6 +74,7 @@ fn[X] WebView::new_managed(
   width? : Int = 800,
   height? : Int = 600,
   debug? : Int = 0,
+  devtools? : Bool = false,
   frameless? : Bool = false,
   resizable? : Bool = true,
   closeable? : Bool = true,
@@ -83,6 +84,7 @@ fn[X] WebView::new_managed(
   title_bar_overlay? : Bool = false,
   traffic_light_position? : TrafficLightPosition = { x: -1, y: -1 },
 ) -> WebView[X] {
+  let create_debug = if devtools && debug <= 0 { 1 } else { debug }
   let window_id = wm_create_window(
     @encoding/utf8.encode(title),
     @encoding/utf8.encode(url),
@@ -91,15 +93,18 @@ fn[X] WebView::new_managed(
     -1,
     -1,
     0,
-    0,
+    create_debug,
     -1,
   )
   guard window_id > 0 else {
     abort("WebView::new_managed failed: wm_create_window")
   }
   let handle = wm_get_handle(window_id)
-  if debug > 0 {
-    set_log_level(debug)
+  if create_debug > 0 {
+    set_log_level(create_debug)
+  }
+  if devtools {
+    ignore(wm_set_devtools(window_id, 1))
   }
   ignore(
     wm_set_window_customization(
@@ -432,6 +437,12 @@ pub fn[X] WebView::start_drag(self : WebView[X]) -> Unit {
 /// Close native window.
 pub fn[X] WebView::close(self : WebView[X]) -> Unit {
   ignore(wm_close_window(self.window_id))
+}
+
+///|
+/// Enable or disable developer tools integration at runtime.
+pub fn[X] WebView::set_devtools(self : WebView[X], enabled : Bool) -> Unit {
+  ignore(wm_set_devtools(self.window_id, if enabled { 1 } else { 0 }))
 }
 
 ///|
