@@ -10,6 +10,8 @@ pub fn[Reply : @json.FromJson] decode_process_command_response(String) -> Reply 
 
 pub fn wm_cleanup() -> Unit
 
+pub fn wm_close_window(Int) -> Int
+
 pub fn wm_connect_child_process() -> Int
 
 pub fn wm_create_child_window(Bytes, Bytes, Int, Int, Int) -> Int
@@ -52,6 +54,8 @@ pub fn wm_ipc_send(Int, Int, Int, Bytes, Bytes) -> Int
 
 pub fn wm_kill_child(Int) -> Int
 
+pub fn wm_minimize_window(Int) -> Int
+
 pub fn wm_navigate(Int, Bytes) -> Int
 
 pub fn wm_return_raw(Int, Bytes, Int, Bytes) -> Int
@@ -68,9 +72,13 @@ pub fn wm_set_title(Int, Bytes) -> Int
 
 pub fn wm_set_visibility(Int, Int) -> Int
 
+pub fn wm_set_window_customization(Int, Int, Int, Int) -> Int
+
 pub fn wm_spawn_process(Bytes, Bytes) -> Int
 
 pub fn wm_terminate_window(Int) -> Int
+
+pub fn wm_toggle_maximize_window(Int) -> Int
 
 pub fn wm_wait_child_noblock(Int) -> Int
 
@@ -207,17 +215,22 @@ pub(all) enum SizeHint {
 
 type WebView[X]
 pub fn[X] WebView::back(Self[X]) -> Unit
+pub fn[X] WebView::close(Self[X]) -> Unit
 pub fn[X] WebView::destroy(Self[X]) -> Unit
+pub fn[X] WebView::enable_custom_titlebar_support(Self[X]) -> Unit
 pub fn[X] WebView::forward(Self[X]) -> Unit
 pub fn[X] WebView::get_handle(Self[X]) -> WebView_t
 pub fn[X] WebView::go(Self[X], Int) -> Unit
+pub fn[X] WebView::minimize(Self[X]) -> Unit
 pub fn[X] WebView::navigate(Self[X], String) -> Unit
 pub fn[X] WebView::reload(Self[X]) -> Unit
 pub fn[X] WebView::reload_force(Self[X]) -> Unit
 pub fn[X] WebView::set_html(Self[X], String) -> Unit
 pub fn[X] WebView::set_size(Self[X], Int, Int, SizeHint) -> Unit
 pub fn[X] WebView::set_title(Self[X], String) -> Unit
+pub fn[X] WebView::set_window_customization(Self[X], WindowCustomization) -> Unit
 pub fn[X] WebView::terminate(Self[X]) -> Unit
+pub fn[X] WebView::toggle_maximize(Self[X]) -> Unit
 
 #external
 pub type WebView_t
@@ -229,23 +242,36 @@ pub struct Window {
   size_hint : SizeHint
   debug : Int
   child_arg : String
+  mut customization : WindowCustomization
   mut url : String
   mut html : String
   mut runtime_window_id : Int
   plugins : Array[Plugin]
 }
+pub fn Window::close(Self) -> Unit
 pub fn Window::eval(Self, String) -> Unit
 pub fn Window::install(Self, Plugin) -> Unit
+pub fn Window::minimize(Self) -> Unit
 pub fn Window::navigate(Self, String) -> Unit
-pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String) -> Self
+pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String, customization? : WindowCustomization) -> Self
 pub fn Window::run(Self) -> Unit
 pub fn Window::set_html(Self, String) -> Unit
+pub fn Window::set_window_customization(Self, WindowCustomization) -> Unit
+pub fn Window::toggle_maximize(Self) -> Unit
+
+pub struct WindowCustomization {
+  frameless : Bool
+  resizable : Bool
+  always_on_top : Bool
+}
+pub fn WindowCustomization::default() -> Self
 
 pub struct WindowManager {
   process_type : ProcessType
   mut window_ids : Array[Int]
 }
 pub fn WindowManager::broadcast(Self, Int, String, String) -> Int
+pub fn WindowManager::close_window(Self, Int) -> Int
 pub fn WindowManager::connect_child_process() -> Int
 pub fn WindowManager::create_child_window(Self, String, String, width? : Int, height? : Int, parent_id? : Int) -> Int
 pub fn WindowManager::create_window(Self, String, String, width? : Int, height? : Int) -> Int
@@ -255,12 +281,15 @@ pub fn WindowManager::fork_process(Self) -> Int
 pub fn WindowManager::init(is_main? : Bool) -> Self
 pub fn WindowManager::is_child_process(Self) -> Bool
 pub fn WindowManager::is_main_process(Self) -> Bool
+pub fn WindowManager::minimize_window(Self, Int) -> Int
 pub fn WindowManager::request(Self, Int, Int, String, String, timeout_ms? : Int) -> String
 pub fn WindowManager::respond(Self, Int, Int, Int, String) -> Int
 pub fn WindowManager::run_window(Self, Int) -> Int
 pub fn WindowManager::send_message(Self, Int, Int, IpcMessageType, String, String) -> Int
 pub async fn WindowManager::serve_process_commands(Self, Int, async (ProcessCommandRequest) -> ProcessCommandResponse, subtype? : String) -> Unit
+pub fn WindowManager::set_window_customization(Self, Int, WindowCustomization) -> Int
 pub fn WindowManager::spawn_process(Self, String, String) -> Int
+pub fn WindowManager::toggle_maximize_window(Self, Int) -> Int
 pub fn WindowManager::try_pop_message(Self, Int) -> IpcMessage?
 pub fn WindowManager::wait_child_noblock(Self, Int) -> Int
 

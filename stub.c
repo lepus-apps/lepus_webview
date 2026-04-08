@@ -280,6 +280,11 @@ static int winsock_init(void)
 }
 #endif
 
+#ifdef __APPLE__
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
+
 /* ── webview 前向声明 ─────────────────────────────────────────── */
 typedef void *webview_t;
 extern webview_t webview_create(int debug, void *window);
@@ -1453,6 +1458,169 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_size(int window_id, int width, int height,
     int size_data[2] = {width, height};
     fire_window_event(w, WINDOW_EVT_RESIZED, size_data);
     return 0;
+}
+
+static void *moonbit_window_native_handle(webview_window_t *w)
+{
+    if (!w || !w->handle)
+        return NULL;
+    int64_t native = webview_get_native_handle(w->handle, 0);
+    if (native == 0)
+        native = webview_get_window(w->handle);
+    return (void *)(intptr_t)native;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_set_window_customization(
+    int window_id,
+    int frameless,
+    int resizable,
+    int always_on_top)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+
+#ifdef _WIN32
+    HWND hwnd = (HWND)moonbit_window_native_handle(w);
+    if (!hwnd)
+        return -1;
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+    if (frameless)
+        style &= ~(WS_CAPTION | WS_THICKFRAME);
+    else
+        style |= WS_CAPTION;
+    if (resizable)
+        style |= (WS_THICKFRAME | WS_MAXIMIZEBOX);
+    else
+        style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    SetWindowLong(hwnd, GWL_STYLE, style);
+    SetWindowPos(
+        hwnd,
+        always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    return 0;
+#elif defined(__APPLE__)
+    void *ns_window = moonbit_window_native_handle(w);
+    if (!ns_window)
+        return -1;
+    SEL sel_style_mask = sel_registerName("styleMask");
+    SEL sel_set_style_mask = sel_registerName("setStyleMask:");
+    unsigned long style = ((unsigned long(*)(id, SEL))objc_msgSend)((id)ns_window, sel_style_mask);
+    const unsigned long NSWindowStyleMaskTitled = 1UL << 0;
+    const unsigned long NSWindowStyleMaskClosable = 1UL << 1;
+    const unsigned long NSWindowStyleMaskMiniaturizable = 1UL << 2;
+    const unsigned long NSWindowStyleMaskResizable = 1UL << 3;
+    const unsigned long NSWindowStyleMaskFullSizeContentView = 1UL << 15;
+    if (frameless)
+    {
+        style &= ~(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
+        style |= NSWindowStyleMaskFullSizeContentView;
+    }
+    else
+    {
+        style |= (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
+        style &= ~NSWindowStyleMaskFullSizeContentView;
+    }
+    if (resizable)
+        style |= NSWindowStyleMaskResizable;
+    else
+        style &= ~NSWindowStyleMaskResizable;
+    ((void (*)(id, SEL, unsigned long))objc_msgSend)((id)ns_window, sel_set_style_mask, style);
+    if (frameless)
+    {
+        ((void (*)(id, SEL, long))objc_msgSend)((id)ns_window, sel_registerName("setTitleVisibility:"), 1L);
+        ((void (*)(id, SEL, int))objc_msgSend)((id)ns_window, sel_registerName("setTitlebarAppearsTransparent:"), 1);
+        ((void (*)(id, SEL, int))objc_msgSend)((id)ns_window, sel_registerName("setMovableByWindowBackground:"), 1);
+    }
+    ((void (*)(id, SEL, long))objc_msgSend)(
+        (id)ns_window,
+        sel_registerName("setLevel:"),
+        always_on_top ? 3L : 0L);
+    return 0;
+#else
+    (void)frameless;
+    (void)resizable;
+    (void)always_on_top;
+    return 0;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_minimize_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+#ifdef _WIN32
+    HWND hwnd = (HWND)moonbit_window_native_handle(w);
+    if (!hwnd)
+        return -1;
+    ShowWindow(hwnd, SW_MINIMIZE);
+    return 0;
+#elif defined(__APPLE__)
+    void *ns_window = moonbit_window_native_handle(w);
+    if (!ns_window)
+        return -1;
+    ((void (*)(id, SEL, id))objc_msgSend)((id)ns_window, sel_registerName("performMiniaturize:"), (id)ns_window);
+    return 0;
+#else
+    return -1;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_toggle_maximize_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+#ifdef _WIN32
+    HWND hwnd = (HWND)moonbit_window_native_handle(w);
+    if (!hwnd)
+        return -1;
+    ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+    return 0;
+#elif defined(__APPLE__)
+    void *ns_window = moonbit_window_native_handle(w);
+    if (!ns_window)
+        return -1;
+    ((void (*)(id, SEL, id))objc_msgSend)((id)ns_window, sel_registerName("zoom:"), (id)ns_window);
+    return 0;
+#else
+    return -1;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_close_window(int window_id)
+{
+    pthread_mutex_lock(&g_wm.mutex);
+    webview_window_t *w = find_window(window_id);
+    pthread_mutex_unlock(&g_wm.mutex);
+    if (!w || !w->handle)
+        return -1;
+#ifdef _WIN32
+    HWND hwnd = (HWND)moonbit_window_native_handle(w);
+    if (!hwnd)
+        return -1;
+    PostMessage(hwnd, WM_CLOSE, 0, 0);
+    return 0;
+#elif defined(__APPLE__)
+    void *ns_window = moonbit_window_native_handle(w);
+    if (!ns_window)
+        return -1;
+    ((void (*)(id, SEL, id))objc_msgSend)((id)ns_window, sel_registerName("performClose:"), (id)ns_window);
+    return 0;
+#else
+    return moonbit_wm_terminate_window(window_id);
+#endif
 }
 
 MOONBIT_FFI_EXPORT int moonbit_wm_navigate(int window_id, const char *url)

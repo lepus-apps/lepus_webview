@@ -57,6 +57,19 @@ pub struct IpcMessage {
 }
 
 ///|
+/// Native window customization flags.
+pub struct WindowCustomization {
+  frameless : Bool
+  resizable : Bool
+  always_on_top : Bool
+}
+
+///|
+pub fn WindowCustomization::default() -> WindowCustomization {
+  { frameless: false, resizable: true, always_on_top: false }
+}
+
+///|
 /// Initialize WM runtime for current process.
 ///
 /// - main process: pass `true`
@@ -170,6 +183,60 @@ pub fn WindowManager::destroy_window(
   window_id : Int,
 ) -> Int {
   wm_destroy_window(window_id)
+}
+
+///|
+/// Apply native custom-window style flags.
+pub fn WindowManager::set_window_customization(
+  _self : WindowManager,
+  window_id : Int,
+  customization : WindowCustomization,
+) -> Int {
+  wm_set_window_customization(
+    window_id,
+    if customization.frameless {
+      1
+    } else {
+      0
+    },
+    if customization.resizable {
+      1
+    } else {
+      0
+    },
+    if customization.always_on_top {
+      1
+    } else {
+      0
+    },
+  )
+}
+
+///|
+/// Minimize native window.
+pub fn WindowManager::minimize_window(
+  _self : WindowManager,
+  window_id : Int,
+) -> Int {
+  wm_minimize_window(window_id)
+}
+
+///|
+/// Toggle native maximize state.
+pub fn WindowManager::toggle_maximize_window(
+  _self : WindowManager,
+  window_id : Int,
+) -> Int {
+  wm_toggle_maximize_window(window_id)
+}
+
+///|
+/// Close native window.
+pub fn WindowManager::close_window(
+  _self : WindowManager,
+  window_id : Int,
+) -> Int {
+  wm_close_window(window_id)
 }
 
 ///|
