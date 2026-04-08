@@ -74,6 +74,7 @@ fn[X] WebView::new_managed(
   width? : Int = 800,
   height? : Int = 600,
   debug? : Int = 0,
+  customization? : WindowCustomization = WindowCustomization::default(),
 ) -> WebView[X] {
   let window_id = wm_create_window(
     @encoding/utf8.encode(title),
@@ -93,6 +94,26 @@ fn[X] WebView::new_managed(
   if debug > 0 {
     set_log_level(debug)
   }
+  ignore(
+    wm_set_window_customization(
+      window_id,
+      if customization.frameless {
+        1
+      } else {
+        0
+      },
+      if customization.resizable {
+        1
+      } else {
+        0
+      },
+      if customization.always_on_top {
+        1
+      } else {
+        0
+      },
+    ),
+  )
   WebView::{ handle, window_id, task_group }
 }
 
@@ -215,6 +236,74 @@ pub fn[X] WebView::set_size(
   hints : SizeHint,
 ) -> Unit {
   ignore(wm_set_size(self.window_id, width, height, hints))
+}
+
+///|
+/// Applies native custom-window style flags at runtime.
+pub fn[X] WebView::set_window_customization(
+  self : WebView[X],
+  customization : WindowCustomization,
+) -> Unit {
+  ignore(
+    wm_set_window_customization(
+      self.window_id,
+      if customization.frameless {
+        1
+      } else {
+        0
+      },
+      if customization.resizable {
+        1
+      } else {
+        0
+      },
+      if customization.always_on_top {
+        1
+      } else {
+        0
+      },
+    ),
+  )
+}
+
+///|
+/// Injects CSS helper classes for Electron-like drag regions.
+///
+/// - `.lepus-drag`: draggable zone (`-webkit-app-region: drag`)
+/// - `.lepus-no-drag`: interactive zone (`-webkit-app-region: no-drag`)
+pub fn[X] WebView::enable_custom_titlebar_support(self : WebView[X]) -> Unit {
+  self.init(
+    (
+      #|(() => {
+      #|  if (window.__LEPUS_DRAG_STYLE__) return;
+      #|  const style = document.createElement('style');
+      #|  style.textContent = [
+      #|    '.lepus-drag { -webkit-app-region: drag; app-region: drag; user-select: none; }',
+      #|    '.lepus-no-drag { -webkit-app-region: no-drag; app-region: no-drag; }',
+      #|  ].join('');
+      #|  document.documentElement.appendChild(style);
+      #|  window.__LEPUS_DRAG_STYLE__ = true;
+      #|})();
+    ),
+  )
+}
+
+///|
+/// Minimize native window.
+pub fn[X] WebView::minimize(self : WebView[X]) -> Unit {
+  ignore(wm_minimize_window(self.window_id))
+}
+
+///|
+/// Toggle native maximize state.
+pub fn[X] WebView::toggle_maximize(self : WebView[X]) -> Unit {
+  ignore(wm_toggle_maximize_window(self.window_id))
+}
+
+///|
+/// Close native window.
+pub fn[X] WebView::close(self : WebView[X]) -> Unit {
+  ignore(wm_close_window(self.window_id))
 }
 
 ///|

@@ -112,6 +112,27 @@ pub extern "C" fn wm_set_size(
 ) -> Int = "moonbit_wm_set_size"
 
 ///|
+/// Apply native custom-window style flags.
+pub extern "C" fn wm_set_window_customization(
+  window_id : Int,
+  frameless : Int,
+  resizable : Int,
+  always_on_top : Int,
+) -> Int = "moonbit_wm_set_window_customization"
+
+///|
+/// Minimize native window.
+pub extern "C" fn wm_minimize_window(window_id : Int) -> Int = "moonbit_wm_minimize_window"
+
+///|
+/// Toggle native maximize state.
+pub extern "C" fn wm_toggle_maximize_window(window_id : Int) -> Int = "moonbit_wm_toggle_maximize_window"
+
+///|
+/// Close native window.
+pub extern "C" fn wm_close_window(window_id : Int) -> Int = "moonbit_wm_close_window"
+
+///|
 /// Navigate managed window to URL.
 #borrow(url)
 pub extern "C" fn wm_navigate(window_id : Int, url : Bytes) -> Int = "moonbit_wm_navigate"

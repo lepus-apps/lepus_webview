@@ -8,6 +8,7 @@ pub struct Window {
   size_hint : SizeHint
   debug : Int
   child_arg : String
+  mut customization : WindowCustomization
   mut url : String
   mut html : String
   mut runtime_window_id : Int
@@ -25,6 +26,7 @@ pub fn Window::new(
   size_hint? : SizeHint = SizeHint::None,
   debug? : Int = 0,
   child_arg? : String = "--moonbit-webview-child",
+  customization? : WindowCustomization = WindowCustomization::default(),
 ) -> Window {
   {
     title,
@@ -33,10 +35,42 @@ pub fn Window::new(
     height,
     debug,
     child_arg,
+    customization,
     html: "",
     runtime_window_id: -1,
     plugins: [],
     size_hint,
+  }
+}
+
+///|
+/// Applies native custom-window style flags.
+pub fn Window::set_window_customization(
+  self : Window,
+  customization : WindowCustomization,
+) -> Unit {
+  self.customization = customization
+  if self.runtime_window_id > 0 {
+    ignore(
+      wm_set_window_customization(
+        self.runtime_window_id,
+        if customization.frameless {
+          1
+        } else {
+          0
+        },
+        if customization.resizable {
+          1
+        } else {
+          0
+        },
+        if customization.always_on_top {
+          1
+        } else {
+          0
+        },
+      ),
+    )
   }
 }
 
@@ -94,14 +128,39 @@ async fn Window::run_child_async(self : Window) -> Unit {
       width=self.width,
       height=self.height,
       debug=self.debug,
+      customization=self.customization,
     )
     self.runtime_window_id = webview.window_id()
+    if self.customization.frameless {
+      webview.enable_custom_titlebar_support()
+    }
     self.install_child_plugins(webview, wm)
     if self.html != "" {
       webview.set_html(self.html)
     }
     webview.run()
   })
+}
+
+///|
+/// Minimize native window.
+pub fn Window::minimize(self : Window) -> Unit {
+  let window_id = self.require_runtime_window_id()
+  ignore(wm_minimize_window(window_id))
+}
+
+///|
+/// Toggle native maximize state.
+pub fn Window::toggle_maximize(self : Window) -> Unit {
+  let window_id = self.require_runtime_window_id()
+  ignore(wm_toggle_maximize_window(window_id))
+}
+
+///|
+/// Close native window.
+pub fn Window::close(self : Window) -> Unit {
+  let window_id = self.require_runtime_window_id()
+  ignore(wm_close_window(window_id))
 }
 
 ///|
