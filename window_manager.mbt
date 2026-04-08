@@ -57,19 +57,6 @@ pub struct IpcMessage {
 }
 
 ///|
-/// Native window customization flags.
-pub struct WindowCustomization {
-  frameless : Bool
-  resizable : Bool
-  always_on_top : Bool
-}
-
-///|
-pub fn WindowCustomization::default() -> WindowCustomization {
-  { frameless: false, resizable: true, always_on_top: false }
-}
-
-///|
 /// Initialize WM runtime for current process.
 ///
 /// - main process: pass `true`
@@ -190,21 +177,29 @@ pub fn WindowManager::destroy_window(
 pub fn WindowManager::set_window_customization(
   _self : WindowManager,
   window_id : Int,
-  customization : WindowCustomization,
+  frameless : Bool,
+  resizable : Bool,
+  always_on_top : Bool,
+  transparent : Bool,
 ) -> Int {
   wm_set_window_customization(
     window_id,
-    if customization.frameless {
+    if frameless {
       1
     } else {
       0
     },
-    if customization.resizable {
+    if resizable {
       1
     } else {
       0
     },
-    if customization.always_on_top {
+    if always_on_top {
+      1
+    } else {
+      0
+    },
+    if transparent {
       1
     } else {
       0

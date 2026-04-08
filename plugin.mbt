@@ -73,29 +73,8 @@ pub fn Plugin::new(name : String, register : (PluginBuilder) -> Unit) -> Plugin 
 }
 
 ///|
-/// Registers a typed synchronous plugin command.
-pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command(
-  self : PluginBuilder,
-  api_name : String,
-  callback : (Payload) -> Reply,
-) -> Unit {
-  let plugin_name = self.plugin_name
-  self.parent_installers.push(router => router.command(api_name, callback))
-  self.child_installers.push((plugin, proxy) => {
-    let handler : (Payload) -> Reply raise = proxy.plugin_handler(
-      plugin_name, api_name,
-    )
-    plugin.command_result_bg(api_name, handler)
-  })
-  self.direct_installers.push(plugin => {
-    let handler : (Payload) -> Reply raise = payload => callback(payload)
-    plugin.command_result_bg(api_name, handler)
-  })
-}
-
-///|
 /// Registers a typed async plugin command.
-pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command_async(
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command(
   self : PluginBuilder,
   api_name : String,
   callback : async (Payload) -> Reply,

@@ -72,7 +72,7 @@ pub fn wm_set_title(Int, Bytes) -> Int
 
 pub fn wm_set_visibility(Int, Int) -> Int
 
-pub fn wm_set_window_customization(Int, Int, Int, Int) -> Int
+pub fn wm_set_window_customization(Int, Int, Int, Int, Int) -> Int
 
 pub fn wm_spawn_process(Bytes, Bytes) -> Int
 
@@ -131,8 +131,7 @@ pub struct PluginBuilder {
   child_installers : Array[(PluginContext[Unit], ProcessCommandProxy) -> Unit]
   direct_installers : Array[(PluginContext[Unit]) -> Unit]
 }
-pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command(Self, String, (Payload) -> Reply) -> Unit
-pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command_async(Self, String, async (Payload) -> Reply) -> Unit
+pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command(Self, String, async (Payload) -> Reply) -> Unit
 pub fn[Payload : @json.FromJson + ToJson, Reply : @json.FromJson + ToJson] PluginBuilder::command_result_async(Self, String, async (Payload) -> Reply) -> Unit
 
 type PluginContext[X]
@@ -218,6 +217,7 @@ pub fn[X] WebView::back(Self[X]) -> Unit
 pub fn[X] WebView::close(Self[X]) -> Unit
 pub fn[X] WebView::destroy(Self[X]) -> Unit
 pub fn[X] WebView::enable_custom_titlebar_support(Self[X]) -> Unit
+pub fn[X] WebView::enable_transparent_background_support(Self[X]) -> Unit
 pub fn[X] WebView::forward(Self[X]) -> Unit
 pub fn[X] WebView::get_handle(Self[X]) -> WebView_t
 pub fn[X] WebView::go(Self[X], Int) -> Unit
@@ -228,7 +228,7 @@ pub fn[X] WebView::reload_force(Self[X]) -> Unit
 pub fn[X] WebView::set_html(Self[X], String) -> Unit
 pub fn[X] WebView::set_size(Self[X], Int, Int, SizeHint) -> Unit
 pub fn[X] WebView::set_title(Self[X], String) -> Unit
-pub fn[X] WebView::set_window_customization(Self[X], WindowCustomization) -> Unit
+pub fn[X] WebView::set_window_customization(Self[X], Bool, Bool, Bool, Bool) -> Unit
 pub fn[X] WebView::terminate(Self[X]) -> Unit
 pub fn[X] WebView::toggle_maximize(Self[X]) -> Unit
 
@@ -242,7 +242,10 @@ pub struct Window {
   size_hint : SizeHint
   debug : Int
   child_arg : String
-  mut customization : WindowCustomization
+  mut frameless : Bool
+  mut resizable : Bool
+  mut always_on_top : Bool
+  mut transparent : Bool
   mut url : String
   mut html : String
   mut runtime_window_id : Int
@@ -253,18 +256,11 @@ pub fn Window::eval(Self, String) -> Unit
 pub fn Window::install(Self, Plugin) -> Unit
 pub fn Window::minimize(Self) -> Unit
 pub fn Window::navigate(Self, String) -> Unit
-pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String, customization? : WindowCustomization) -> Self
+pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, child_arg? : String, frameless? : Bool, resizable? : Bool, always_on_top? : Bool, transparent? : Bool) -> Self
 pub fn Window::run(Self) -> Unit
 pub fn Window::set_html(Self, String) -> Unit
-pub fn Window::set_window_customization(Self, WindowCustomization) -> Unit
+pub fn Window::set_window_customization(Self, Bool, Bool, Bool, Bool) -> Unit
 pub fn Window::toggle_maximize(Self) -> Unit
-
-pub struct WindowCustomization {
-  frameless : Bool
-  resizable : Bool
-  always_on_top : Bool
-}
-pub fn WindowCustomization::default() -> Self
 
 pub struct WindowManager {
   process_type : ProcessType
@@ -287,7 +283,7 @@ pub fn WindowManager::respond(Self, Int, Int, Int, String) -> Int
 pub fn WindowManager::run_window(Self, Int) -> Int
 pub fn WindowManager::send_message(Self, Int, Int, IpcMessageType, String, String) -> Int
 pub async fn WindowManager::serve_process_commands(Self, Int, async (ProcessCommandRequest) -> ProcessCommandResponse, subtype? : String) -> Unit
-pub fn WindowManager::set_window_customization(Self, Int, WindowCustomization) -> Int
+pub fn WindowManager::set_window_customization(Self, Int, Bool, Bool, Bool, Bool) -> Int
 pub fn WindowManager::spawn_process(Self, String, String) -> Int
 pub fn WindowManager::toggle_maximize_window(Self, Int) -> Int
 pub fn WindowManager::try_pop_message(Self, Int) -> IpcMessage?

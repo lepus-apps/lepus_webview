@@ -118,6 +118,7 @@ pub extern "C" fn wm_set_window_customization(
   frameless : Int,
   resizable : Int,
   always_on_top : Int,
+  transparent : Int,
 ) -> Int = "moonbit_wm_set_window_customization"
 
 ///|
