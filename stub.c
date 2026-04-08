@@ -26,12 +26,6 @@ typedef CONDITION_VARIABLE pthread_cond_t;
 #define THREAD_LOCAL __declspec(thread)
 #define CLOCK_REALTIME 0
 
-struct timespec
-{
-    time_t tv_sec;
-    long tv_nsec;
-};
-
 typedef struct
 {
     void *(*start_routine)(void *);
@@ -182,8 +176,10 @@ static int get_errno_code(void)
         return EINTR;
     case WSAEWOULDBLOCK:
         return EWOULDBLOCK;
+#ifdef WSAEAGAIN
     case WSAEAGAIN:
         return EAGAIN;
+#endif
     default:
         return err;
     }
