@@ -249,34 +249,30 @@ pub fn WindowManager::try_pop_message(
   queue_id : Int,
 ) -> IpcMessage? {
   let handle = wm_ipc_pop_message(queue_id)
-  if ipc_message_is_null(handle) {
-    None
-  } else {
-    let source_window_id = ipc_message_source_window_id(handle)
-    let target_window_id = ipc_message_target_window_id(handle)
-    let message_id = ipc_message_id(handle)
-    let message_type = match ipc_message_type(handle) {
-      0 => IpcMessageType::Data
-      1 => IpcMessageType::Command
-      2 => IpcMessageType::Event
-      3 => IpcMessageType::Request
-      4 => IpcMessageType::Response
-      _ => IpcMessageType::Data
-    }
-    let subtype = @encoding/utf8.decode(ipc_message_subtype(handle)) catch {
-      _ => ""
-    }
-    let data = @encoding/utf8.decode(ipc_message_data(handle)) catch { _ => "" }
-    ipc_message_free(handle)
-    Some(IpcMessage::{
-      source_window_id,
-      target_window_id,
-      message_type,
-      message_id,
-      subtype,
-      data,
-    })
+  let source_window_id = ipc_message_source_window_id(handle)
+  let target_window_id = ipc_message_target_window_id(handle)
+  let message_id = ipc_message_id(handle)
+  let message_type = match ipc_message_type(handle) {
+    0 => IpcMessageType::Data
+    1 => IpcMessageType::Command
+    2 => IpcMessageType::Event
+    3 => IpcMessageType::Request
+    4 => IpcMessageType::Response
+    _ => IpcMessageType::Data
   }
+  let subtype = @encoding/utf8.decode(ipc_message_subtype(handle)) catch {
+    _ => ""
+  }
+  let data = @encoding/utf8.decode(ipc_message_data(handle)) catch { _ => "" }
+  ipc_message_free(handle)
+  Some(IpcMessage::{
+    source_window_id,
+    target_window_id,
+    message_type,
+    message_id,
+    subtype,
+    data,
+  })
 }
 
 ///|

@@ -243,22 +243,8 @@ pub extern "C" fn wm_ipc_respond(
 ) -> Int = "moonbit_wm_ipc_respond"
 
 ///|
-/// Receive an IPC message (non-blocking).
-/// Returns the number of bytes in the received message, or 0 if no message.
-/// The message is stored in a static buffer; copy it before calling again.
-pub extern "C" fn wm_ipc_recv(window_id : Int) -> Int = "moonbit_wm_ipc_recv"
-
-///|
-/// Get the last received IPC message data.
-/// Returns (message_type, subtype, data) as (Int, Bytes, Bytes).
-pub extern "C" fn wm_ipc_get_message(window_id : Int) -> (Int, Bytes, Bytes) = "moonbit_wm_ipc_get_message"
-
-///|
 /// Pop the next queued IPC message snapshot for the given queue id.
 pub extern "C" fn wm_ipc_pop_message(window_id : Int) -> IpcMessageHandle = "moonbit_wm_ipc_pop_message"
-
-///|
-extern "C" fn ipc_message_is_null(message : IpcMessageHandle) -> Bool = "moonbit_is_null"
 
 ///|
 extern "C" fn ipc_message_free(message : IpcMessageHandle) -> Unit = "moonbit_wm_ipc_message_free"

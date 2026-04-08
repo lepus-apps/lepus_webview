@@ -233,7 +233,6 @@ Convenience helpers on `WebView`: `install_plugin`, `plugin_host`, `emit_plugin`
 |--------|---------|
 | `moonbit_webview_bind` | Allocates a `moonbit_webview_binding` struct to keep the MoonBit closure alive; wires it to `webview_bind` via a static trampoline. |
 | `moonbit_webview_unbind` | Calls `webview_unbind` then frees the binding struct and decrements the MoonBit closure refcount. |
-| `moonbit_webview_identity` | Returns the raw pointer cast to `int64_t` as a stable identity key for the global `PluginHost` registry. |
 | `moonbit_webview_copy_cstr` | Copies a null-terminated C string into a MoonBit `Bytes` value (preserving null terminator). |
 | `moonbit_is_null` (implicit) | Exposed via the extern declaration in `binding.mbt` to let MoonBit check if a binding handle is null. |
 
