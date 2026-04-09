@@ -37,12 +37,12 @@ fn main {
   )
   window.install(
     @webview.Plugin::new("console", plugin => {
-      plugin.command("log", (payload : String) => {
-        println("[child-console:log] \{payload}")
+      plugin.command("log", (payload : Json) => {
+        println("[child-console:log] \{payload.stringify()}")
         payload
       })
-      plugin.command("error", (payload : String) => {
-        println("[child-console:error] \{payload}")
+      plugin.command("error", (payload : Json) => {
+        println("[child-console:error] \{payload.stringify()}")
         payload
       })
     }),
@@ -63,6 +63,7 @@ fn main {
       #|    border-bottom: 1px solid #d1d5db;
       #|    -webkit-app-region: drag;
       #|    user-select: none;
+      #|    --webkit-user-select: none;
       #|  }
       #|  .content { padding: 16px; }
       #|</style>
@@ -82,10 +83,10 @@ fn main {
       #|    try {
       #|      document.getElementById("sum-result").textContent = "Calculating..."
       #|      const result = await window.lepusApi.math.sum_async({ left: 2, right: 3 });
-      #|      window.lepusApi.console.log("[example] sum result: " + JSON.stringify(result));
+      #|      window.lepusApi.console.log("[example] sum result: ", JSON.stringify(result));
       #|      document.getElementById("sum-result").textContent = "Result: " + result.total;
       #|    } catch(e) {
-      #|      window.lepusApi.console.error("[example] sum error: " + e.message);
+      #|      window.lepusApi.console.error("[example] sum error: ", e.message);
       #|      document.getElementById("sum-result").textContent = "Error: " + e.message;
       #|    }
       #|  });
