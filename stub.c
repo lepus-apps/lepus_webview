@@ -307,6 +307,97 @@ extern int64_t webview_get_native_handle(webview_t w, int kind);
 extern char **environ;
 #endif
 
+/* ── Backend seam ─────────────────────────────────────────────── */
+/*
+ * The current runtime still uses the upstream webview C library directly.
+ * New backend entry points are routed through this wrapper layer so we can
+ * migrate to a Wry-backed implementation without rewriting the MoonBit/IPC
+ * surface again.
+ */
+static webview_t lp_backend_create(int debug)
+{
+    return webview_create(debug, NULL);
+}
+
+static void lp_backend_destroy(webview_t handle)
+{
+    webview_destroy(handle);
+}
+
+static void lp_backend_run(webview_t handle)
+{
+    webview_run(handle);
+}
+
+static void lp_backend_terminate(webview_t handle)
+{
+    webview_terminate(handle);
+}
+
+static void lp_backend_dispatch(webview_t handle, void (*fn)(webview_t, void *), void *arg)
+{
+    webview_dispatch(handle, fn, arg);
+}
+
+static void lp_backend_set_title(webview_t handle, const char *title)
+{
+    webview_set_title(handle, title);
+}
+
+static void lp_backend_set_size(webview_t handle, int width, int height, int hints)
+{
+    webview_set_size(handle, width, height, hints);
+}
+
+static void lp_backend_navigate(webview_t handle, const char *url)
+{
+    webview_navigate(handle, url);
+}
+
+static void lp_backend_init_js(webview_t handle, const char *js)
+{
+    webview_init(handle, js);
+}
+
+static int lp_backend_eval_js(webview_t handle, const char *js)
+{
+    return webview_eval(handle, js);
+}
+
+static void lp_backend_bind(
+    webview_t handle,
+    const char *name,
+    void (*fn)(const char *seq, const char *req, void *arg),
+    void *arg)
+{
+    webview_bind(handle, name, fn, arg);
+}
+
+static void lp_backend_unbind(webview_t handle, const char *name)
+{
+    webview_unbind(handle, name);
+}
+
+static void lp_backend_return(webview_t handle, const char *seq, int status, const char *result)
+{
+    webview_return(handle, seq, status, result);
+}
+
+static void lp_backend_set_html(webview_t handle, const char *html)
+{
+    webview_set_html(handle, html);
+}
+
+static int64_t lp_backend_get_window_handle(webview_t handle)
+{
+    return webview_get_window(handle);
+}
+
+static int64_t lp_backend_get_native_handle(webview_t handle, int kind)
+{
+    return webview_get_native_handle(handle, kind);
+}
+
 /* moonbit 运行时接口 */
 #include "moonbit.h"
 
@@ -581,7 +672,7 @@ typedef struct
 static void eval_js_trampoline(webview_t handle, void *arg)
 {
     eval_js_ctx_t *ctx = (eval_js_ctx_t *)arg;
-    webview_eval(handle, ctx->js);
+    lp_backend_eval_js(handle, ctx->js);
     free(ctx->js);
     free(ctx);
 }
@@ -596,7 +687,7 @@ typedef struct
 static void return_raw_trampoline(webview_t handle, void *arg)
 {
     return_raw_ctx_t *ctx = (return_raw_ctx_t *)arg;
-    webview_return(handle, ctx->seq, ctx->status, ctx->result);
+    lp_backend_return(handle, ctx->seq, ctx->status, ctx->result);
     free(ctx->seq);
     free(ctx->result);
     free(ctx);
@@ -1217,7 +1308,7 @@ MOONBIT_FFI_EXPORT void moonbit_wm_cleanup(void)
         webview_window_t *nxt = cur->next;
         if (cur->handle)
         {
-            webview_destroy(cur->handle);
+            lp_backend_destroy(cur->handle);
             cur->handle = NULL;
         }
         free(cur);
@@ -1298,17 +1389,17 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_window(
     strncpy(w->url, url ? url : "", sizeof(w->url) - 1);
 
     /* 创建底层 webview 实例 */
-    w->handle = webview_create(debug, NULL);
+    w->handle = lp_backend_create(debug);
     if (!w->handle)
     {
         free(w);
         return -1;
     }
 
-    webview_set_title(w->handle, w->title);
-    webview_set_size(w->handle, w->width, w->height, w->hints);
+    lp_backend_set_title(w->handle, w->title);
+    lp_backend_set_size(w->handle, w->width, w->height, w->hints);
     if (w->url[0])
-        webview_navigate(w->handle, w->url);
+        lp_backend_navigate(w->handle, w->url);
 
     wm_add(w);
 
@@ -1336,7 +1427,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_destroy_window(int window_id)
 
     if (w->handle)
     {
-        webview_destroy(w->handle);
+        lp_backend_destroy(w->handle);
         w->handle = NULL;
     }
     if (w->ipc_client_fd != IPC_INVALID_SOCKET)
@@ -1367,7 +1458,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_run_window(int window_id)
         return -1;
 
     w->state = WINDOW_STATE_RUNNING;
-    webview_run(w->handle);
+    lp_backend_run(w->handle);
     return 0;
 }
 
@@ -1422,7 +1513,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_terminate_window(int window_id)
     if (!w || !w->handle)
         return -1;
 
-    webview_terminate(w->handle);
+    lp_backend_terminate(w->handle);
     return 0;
 }
 
@@ -1439,7 +1530,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_title(int window_id, const char *title)
         return -1;
 
     strncpy(w->title, title, sizeof(w->title) - 1);
-    webview_set_title(w->handle, title);
+    lp_backend_set_title(w->handle, title);
     return 0;
 }
 
@@ -1454,7 +1545,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_size(int window_id, int width, int height,
     w->width = width;
     w->height = height;
     w->hints = hints;
-    webview_set_size(w->handle, width, height, hints);
+    lp_backend_set_size(w->handle, width, height, hints);
 
     int size_data[2] = {width, height};
     fire_window_event(w, WINDOW_EVT_RESIZED, size_data);
@@ -1465,9 +1556,9 @@ static void *moonbit_window_native_handle(webview_window_t *w)
 {
     if (!w || !w->handle)
         return NULL;
-    int64_t native = webview_get_native_handle(w->handle, 0);
+    int64_t native = lp_backend_get_native_handle(w->handle, 0);
     if (native == 0)
-        native = webview_get_window(w->handle);
+        native = lp_backend_get_window_handle(w->handle);
     return (void *)(intptr_t)native;
 }
 
@@ -2024,7 +2115,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_devtools(int window_id, int enabled)
         return 0;
 
 #ifdef _WIN32
-    webview_init(
+    lp_backend_init_js(
         w->handle,
         "(function(){if(window.__LEPUS_DEVTOOLS_READY__)return;"
         "window.__LEPUS_DEVTOOLS_READY__=true;"
@@ -2081,7 +2172,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_navigate(int window_id, const char *url)
         return -1;
 
     strncpy(w->url, url, sizeof(w->url) - 1);
-    webview_navigate(w->handle, url);
+    lp_backend_navigate(w->handle, url);
     return 0;
 }
 
@@ -2093,7 +2184,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_set_html(int window_id, const char *html)
     if (!w || !w->handle)
         return -1;
 
-    webview_set_html(w->handle, html);
+    lp_backend_set_html(w->handle, html);
     return 0;
 }
 
@@ -2127,7 +2218,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_eval_js(int window_id, const char *js)
         return 0;
     }
 
-    return webview_eval(w->handle, js);
+    return lp_backend_eval_js(w->handle, js);
 }
 
 MOONBIT_FFI_EXPORT int moonbit_wm_init_js(int window_id, const char *js)
@@ -2138,7 +2229,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_init_js(int window_id, const char *js)
     if (!w || !w->handle)
         return -1;
 
-    webview_init(w->handle, js);
+    lp_backend_init_js(w->handle, js);
     return 0;
 }
 
@@ -2157,7 +2248,7 @@ MOONBIT_FFI_EXPORT int moonbit_wm_return_raw(
 
     if (!is_running)
     {
-        webview_return(w->handle, seq, status, result);
+        lp_backend_return(w->handle, seq, status, result);
         return 0;
     }
 
@@ -2989,7 +3080,7 @@ MOONBIT_FFI_EXPORT void *moonbit_webview_bind(
     binding->callback = fn;
     binding->arg = arg;
 
-    webview_bind(w, name, moonbit_webview_bind_trampoline, binding);
+    lp_backend_bind(w, name, moonbit_webview_bind_trampoline, binding);
     return binding;
 }
 
@@ -3001,7 +3092,7 @@ MOONBIT_FFI_EXPORT void moonbit_webview_unbind(
     const char *name,
     void *binding_ptr)
 {
-    webview_unbind(w, name);
+    lp_backend_unbind(w, name);
     if (binding_ptr)
     {
         moonbit_webview_binding *binding = (moonbit_webview_binding *)binding_ptr;
@@ -3075,7 +3166,7 @@ static int wm_dispatch(
         return -1;
     ctx->fn = fn;
     ctx->arg = arg;
-    webview_dispatch(handle, dispatch_trampoline, ctx);
+    lp_backend_dispatch(handle, dispatch_trampoline, ctx);
     return 0;
 }
 
@@ -3280,7 +3371,7 @@ MOONBIT_FFI_EXPORT void moonbit_webview_return_raw(
     int status,
     const char *result)
 {
-    webview_return(w, seq, status, result);
+    lp_backend_return(w, seq, status, result);
 }
 
 /**
@@ -3288,7 +3379,7 @@ MOONBIT_FFI_EXPORT void moonbit_webview_return_raw(
  */
 MOONBIT_FFI_EXPORT void moonbit_webview_terminate(webview_t w)
 {
-    webview_terminate(w);
+    lp_backend_terminate(w);
 }
 MOONBIT_FFI_EXPORT
 moonbit_bytes_t moonbit_webview_copy_cstr(const char *cstr)
