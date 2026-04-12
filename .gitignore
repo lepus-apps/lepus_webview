@@ -4,3 +4,4 @@ _build/
 .moonagent/
 .joycode
 .skills
+.deps

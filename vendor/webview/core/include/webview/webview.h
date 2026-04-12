@@ -4564,7 +4564,7 @@ protected:
       auto webview3 = static_cast<ICoreWebView2_3 *>(nullptr);
       auto hr = m_webview->QueryInterface(IID_PPV_ARGS(&webview3));
       if (FAILED(hr) || !webview3) {
-        return error_info{WEBVIEW_ERROR_UNSUPPORTED};
+        return error_info{WEBVIEW_ERROR_INVALID_STATE};
       }
       hr = webview3->SetVirtualHostNameToFolderMapping(
           host.c_str(), folder.c_str(),
