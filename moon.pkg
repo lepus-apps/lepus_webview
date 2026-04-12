@@ -8,7 +8,7 @@ import {
 supported_targets = "+native"
 
 options(
-  "native-stub": [ "stub.c" ],
+  "native-stub": [ "stub.c", "vendor/webview_vendor.cc" ],
   targets: {
     "binding.mbt": [ "native" ],
     "command.mbt": [ "native" ],

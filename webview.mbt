@@ -188,6 +188,22 @@ pub fn[X] WebView::set_html(self : WebView[X], html : String) -> Unit {
 }
 
 ///|
+/// Register a custom scheme backed by a local root directory for this webview.
+pub fn[X] WebView::set_custom_protocol(
+  self : WebView[X],
+  scheme : String,
+  root_dir : String,
+) -> Unit {
+  ignore(
+    webview_set_custom_protocol(
+      self.handle,
+      @encoding/utf8.encode(scheme),
+      @encoding/utf8.encode(root_dir),
+    ),
+  )
+}
+
+///|
 /// Navigates the webview to the given URL. URL may be a data URI.
 ///
 /// Example:
