@@ -20,6 +20,7 @@ pub struct Window {
   enable_window_controls_plugin : Bool
   mut url : String
   mut html : String
+  pending_custom_protocols : Array[(String, String)]
   mut runtime_window_id : Int
   plugins : Array[Plugin]
 }
@@ -64,6 +65,7 @@ pub fn Window::new(
     traffic_light_position,
     enable_window_controls_plugin,
     html: "",
+    pending_custom_protocols: [],
     runtime_window_id: -1,
     plugins: [],
     size_hint,
@@ -166,14 +168,24 @@ pub fn Window::navigate(self : Window, url : String) -> Unit {
 }
 
 ///|
+/// Register a custom scheme for the child webview before it navigates.
+pub fn Window::set_custom_protocol(
+  self : Window,
+  scheme : String,
+  root_dir : String,
+) -> Unit {
+  self.pending_custom_protocols.push((scheme, root_dir))
+}
+
+///|
 /// Runs the managed app end-to-end.
-pub fn Window::run(self : Window) -> Unit {
+pub async fn Window::run(self : Window) -> Unit {
   let args = @sys.get_cli_args()
   if args.length() > 1 && args[1] == self.child_arg {
     guard WindowManager::connect_child_process() == 0 else {
       abort("ManagedApp::run: connect child process failed")
     }
-    @async.run_async_main(() => self.run_child_async())
+    self.run_child_async()
     return
   }
   let wm = WindowManager::init()
@@ -182,7 +194,7 @@ pub fn Window::run(self : Window) -> Unit {
   guard child_pid > 0 else {
     abort("ManagedApp::run: spawn webview process failed")
   }
-  @async.run_async_main(() => self.build_router().serve(wm, child_pid))
+  self.build_router().serve(wm, child_pid)
 }
 
 ///|
@@ -192,7 +204,7 @@ async fn Window::run_child_async(self : Window) -> Unit {
     let webview = WebView::new_managed(
       task_group,
       title=self.title,
-      url=self.url,
+      url="",
       width=self.width,
       height=self.height,
       debug=self.debug,
@@ -207,6 +219,10 @@ async fn Window::run_child_async(self : Window) -> Unit {
       traffic_light_position=self.traffic_light_position,
     )
     self.runtime_window_id = webview.window_id()
+    self.pending_custom_protocols.each(mapping => {
+      let (scheme, root_dir) = mapping
+      webview.set_custom_protocol(scheme, root_dir)
+    })
     self.install_child_plugins(webview, wm)
     if self.frameless ||
       self.title_bar_style == TitleBarStyle::Hidden ||
@@ -221,6 +237,9 @@ async fn Window::run_child_async(self : Window) -> Unit {
         self.traffic_light_position.0,
         self.traffic_light_position.1,
       )
+    }
+    if self.url != "" {
+      webview.navigate(self.url)
     }
     if self.html != "" {
       webview.set_html(self.html)

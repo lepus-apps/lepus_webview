@@ -414,9 +414,10 @@ WEBVIEW_API webview_error_t webview_return(webview_t w, const char *id,
  * Registers or replaces a custom scheme that serves files from a local root
  * directory.
  *
- * The mapping is global and applies to webviews created after registration.
+ * The mapping applies to the specified webview instance.
  */
-WEBVIEW_API webview_error_t webview_set_custom_protocol(const char *scheme,
+WEBVIEW_API webview_error_t webview_set_custom_protocol(webview_t w,
+                                                        const char *scheme,
                                                         const char *root_dir);
 
 /**
@@ -1229,6 +1230,9 @@ private:
   std::unique_ptr<impl> m_impl;
 };
 
+noresult set_custom_protocol_root(void *owner, const std::string &scheme,
+                                  const std::string &root_dir);
+
 class engine_base {
 public:
   virtual ~engine_base() = default;
@@ -1327,6 +1331,15 @@ window.__webview__.onUnbind(" +
 
   noresult set_html(const std::string &html) { return set_html_impl(html); }
 
+  noresult set_custom_protocol(const std::string &scheme,
+                               const std::string &root_dir) {
+    auto result = set_custom_protocol_root(this, scheme, root_dir);
+    if (!result.ok()) {
+      return result;
+    }
+    return on_custom_protocol_mapping_changed();
+  }
+
   noresult init(const std::string &js) {
     add_user_script(js);
     return {};
@@ -1347,6 +1360,7 @@ protected:
                                  webview_hint_t hints) = 0;
   virtual noresult set_html_impl(const std::string &html) = 0;
   virtual noresult eval_impl(const std::string &js) = 0;
+  virtual noresult on_custom_protocol_mapping_changed() { return {}; }
 
   virtual user_script *add_user_script(const std::string &js) {
     return std::addressof(*m_user_scripts.emplace(m_user_scripts.end(),
@@ -1529,8 +1543,9 @@ struct custom_protocol_mapping_t {
   std::string root_dir;
 };
 
-inline std::vector<custom_protocol_mapping_t> &custom_protocol_mappings() {
-  static std::vector<custom_protocol_mapping_t> mappings;
+inline std::map<void *, std::vector<custom_protocol_mapping_t>>
+    &custom_protocol_mappings_registry() {
+  static std::map<void *, std::vector<custom_protocol_mapping_t>> mappings;
   return mappings;
 }
 
@@ -1662,14 +1677,15 @@ inline const char *guess_mime_type(const std::string &path) {
   return "application/octet-stream";
 }
 
-inline noresult set_custom_protocol_root(const std::string &scheme,
+inline noresult set_custom_protocol_root(void *owner,
+                                         const std::string &scheme,
                                          const std::string &root_dir) {
   auto normalized_scheme = trim_slashes(scheme);
-  if (normalized_scheme.empty() || root_dir.empty()) {
+  if (!owner || normalized_scheme.empty() || root_dir.empty()) {
     return error_info{WEBVIEW_ERROR_INVALID_ARGUMENT};
   }
   std::lock_guard<std::mutex> lock(custom_protocol_mappings_mutex());
-  auto &mappings = custom_protocol_mappings();
+  auto &mappings = custom_protocol_mappings_registry()[owner];
   for (auto &mapping : mappings) {
     if (mapping.scheme == normalized_scheme) {
       mapping.root_dir = root_dir;
@@ -1678,6 +1694,22 @@ inline noresult set_custom_protocol_root(const std::string &scheme,
   }
   mappings.push_back({normalized_scheme, root_dir});
   return {};
+}
+
+inline std::vector<custom_protocol_mapping_t>
+get_custom_protocol_mappings(void *owner) {
+  std::lock_guard<std::mutex> lock(custom_protocol_mappings_mutex());
+  auto &registry = custom_protocol_mappings_registry();
+  auto found = registry.find(owner);
+  if (found == registry.end()) {
+    return {};
+  }
+  return found->second;
+}
+
+inline void clear_custom_protocol_mappings(void *owner) {
+  std::lock_guard<std::mutex> lock(custom_protocol_mappings_mutex());
+  custom_protocol_mappings_registry().erase(owner);
 }
 
 } // namespace detail
@@ -2257,11 +2289,15 @@ using browser_engine = detail::gtk_webkit_engine;
 //
 // ====================================================================
 //
-inline std::string custom_protocol_path_for_request(const std::string &scheme,
+namespace webview {
+namespace detail {
+
+inline std::string custom_protocol_path_for_request(void *owner,
+                                                    const std::string &scheme,
                                                     const std::string &host,
                                                     const std::string &path) {
-  std::lock_guard<std::mutex> lock(custom_protocol_mappings_mutex());
-  for (const auto &mapping : custom_protocol_mappings()) {
+  auto mappings = get_custom_protocol_mappings(owner);
+  for (const auto &mapping : mappings) {
     if (mapping.scheme != scheme) {
       continue;
     }
@@ -2282,6 +2318,9 @@ inline std::string custom_protocol_path_for_request(const std::string &scheme,
   }
   return "";
 }
+
+} // namespace detail
+} // namespace webview
 
 // This implementation uses Cocoa WKWebView backend on macOS. It is
 // written using ObjC runtime and uses WKWebView class as a browser runtime.
@@ -2429,7 +2468,7 @@ inline id make_foundation_string(const std::string &value) {
                             value.c_str());
 }
 
-inline id create_url_scheme_handler() {
+inline id create_url_scheme_handler(void *owner) {
   objc::autoreleasepool arp;
   constexpr auto class_name = "WebviewWKURLSchemeHandler";
   auto cls = objc_lookUpClass(class_name);
@@ -2438,8 +2477,12 @@ inline id create_url_scheme_handler() {
     class_addProtocol(cls, objc_getProtocol("WKURLSchemeHandler"));
     class_addMethod(
         cls, "webView:startURLSchemeTask:"_sel,
-        (IMP)(+[](id, SEL, id, id task) {
+        (IMP)(+[](id self, SEL, id, id task) {
           objc::autoreleasepool local_arp;
+          auto owner = (void *)objc_getAssociatedObject((id)task, "webview");
+          if (!owner) {
+            owner = (void *)objc_getAssociatedObject((id)self, "webview");
+          }
           auto request = objc::msg_send<id>(task, "request"_sel);
           auto url = objc::msg_send<id>(request, "URL"_sel);
           auto scheme_value = objc::msg_send<const char *>(
@@ -2453,8 +2496,8 @@ inline id create_url_scheme_handler() {
               objc::msg_send<const char *>(objc::msg_send<id>(url, "path"_sel),
                                            "UTF8String"_sel);
           auto full_path = custom_protocol_path_for_request(
-              scheme_value ? scheme_value : "", host_value ? host_value : "",
-              path_value ? path_value : "");
+              owner, scheme_value ? scheme_value : "",
+              host_value ? host_value : "", path_value ? path_value : "");
 
           auto fail = [&](NSInteger code) {
             auto error = objc::msg_send<id>(
@@ -2493,7 +2536,10 @@ inline id create_url_scheme_handler() {
                     (IMP)(+[](id, SEL, id, id) {}), "v@:@@");
     objc_registerClassPair(cls);
   }
-  return objc::msg_send<id>((id)cls, "new"_sel);
+  auto handler = objc::msg_send<id>((id)cls, "new"_sel);
+  objc_setAssociatedObject(handler, "webview", (id)owner,
+                           OBJC_ASSOCIATION_ASSIGN);
+  return handler;
 }
 
 class cocoa_wkwebview_engine : public engine_base {
@@ -2578,6 +2624,7 @@ public:
       objc::msg_send<void>(handler, "release"_sel);
     }
     m_scheme_handlers.clear();
+    clear_custom_protocol_mappings(this);
     if (m_owns_window) {
       // Needed for the window to close immediately.
       deplete_run_loop_event_queue();
@@ -2672,6 +2719,35 @@ protected:
         "NSURL"_cls, "URLWithString:"_sel,
         objc::msg_send<id>("NSString"_cls, "stringWithUTF8String:"_sel,
                            url.c_str()));
+
+    auto scheme_value = objc::msg_send<const char *>(
+        objc::msg_send<id>(objc::msg_send<id>(nsurl, "scheme"_sel),
+                           "lowercaseString"_sel),
+        "UTF8String"_sel);
+    auto host_value =
+        objc::msg_send<const char *>(objc::msg_send<id>(nsurl, "host"_sel),
+                                     "UTF8String"_sel);
+    auto path_value =
+        objc::msg_send<const char *>(objc::msg_send<id>(nsurl, "path"_sel),
+                                     "UTF8String"_sel);
+    auto full_path = custom_protocol_path_for_request(
+        this, scheme_value ? scheme_value : "", host_value ? host_value : "",
+        path_value ? path_value : "");
+    if (!full_path.empty()) {
+      std::vector<unsigned char> bytes;
+      if (!file_bytes(full_path, bytes)) {
+        return error_info{WEBVIEW_ERROR_NOT_FOUND};
+      }
+      auto data = objc::msg_send<id>(
+          "NSData"_cls, "dataWithBytes:length:"_sel,
+          bytes.empty() ? nullptr : bytes.data(),
+          static_cast<NSUInteger>(bytes.size()));
+      objc::msg_send<void>(
+          m_webview, "loadData:MIMEType:characterEncodingName:baseURL:"_sel,
+          data, make_foundation_string(guess_mime_type(full_path)), "utf-8"_str,
+          nsurl);
+      return {};
+    }
 
     objc::msg_send<void>(
         m_webview, "loadRequest:"_sel,
@@ -2936,20 +3012,36 @@ private:
       objc::msg_send<void>(m_window, "makeKeyAndOrderFront:"_sel, nullptr);
     }
   }
+  void tear_down_web_view() {
+    objc::autoreleasepool arp;
+    if (m_webview) {
+      if (auto ui_delegate = objc::msg_send<id>(m_webview, "UIDelegate"_sel)) {
+        objc::msg_send<void>(m_webview, "setUIDelegate:"_sel, nullptr);
+        objc::msg_send<void>(ui_delegate, "release"_sel);
+      }
+      if (m_window && m_webview == objc::msg_send<id>(m_window, "contentView"_sel)) {
+        objc::msg_send<void>(m_window, "setContentView:"_sel, nullptr);
+      }
+      objc::msg_send<void>(m_webview, "release"_sel);
+      m_webview = nullptr;
+    }
+    for (auto handler : m_scheme_handlers) {
+      objc::msg_send<void>(handler, "release"_sel);
+    }
+    m_scheme_handlers.clear();
+    m_manager = nullptr;
+  }
   void set_up_web_view() {
     objc::autoreleasepool arp;
 
     auto config = objc::autoreleased(
         objc::msg_send<id>("WKWebViewConfiguration"_cls, "new"_sel));
 
-    {
-      std::lock_guard<std::mutex> lock(custom_protocol_mappings_mutex());
-      for (const auto &mapping : custom_protocol_mappings()) {
-        auto handler = create_url_scheme_handler();
-        m_scheme_handlers.push_back(handler);
-        objc::msg_send<void>(config, "setURLSchemeHandler:forURLScheme:"_sel,
-                             handler, make_foundation_string(mapping.scheme));
-      }
+    for (const auto &mapping : get_custom_protocol_mappings(this)) {
+      auto handler = create_url_scheme_handler(this);
+      m_scheme_handlers.push_back(handler);
+      objc::msg_send<void>(config, "setURLSchemeHandler:forURLScheme:"_sel,
+                           handler, make_foundation_string(mapping.scheme));
     }
 
     m_manager = objc::msg_send<id>(config, "userContentController"_sel);
@@ -3018,6 +3110,15 @@ private:
     add_init_script("function(message) {\n\
   return window.webkit.messageHandlers.__webview__.postMessage(message);\n\
 }");
+  }
+  noresult on_custom_protocol_mapping_changed() override {
+    if (!m_window) {
+      return {};
+    }
+    tear_down_web_view();
+    set_up_web_view();
+    objc::msg_send<void>(m_window, "setContentView:"_sel, m_webview);
+    return {};
   }
   void stop_run_loop() {
     objc::autoreleasepool arp;
@@ -4455,6 +4556,27 @@ protected:
     return {};
   }
 
+  noresult on_custom_protocol_mapping_changed() override {
+    auto mappings = get_custom_protocol_mappings(this);
+    for (const auto &mapping : mappings) {
+      auto host = widen_string(mapping.scheme);
+      auto folder = widen_string(mapping.root_dir);
+      auto webview3 = static_cast<ICoreWebView2_3 *>(nullptr);
+      auto hr = m_webview->QueryInterface(IID_PPV_ARGS(&webview3));
+      if (FAILED(hr) || !webview3) {
+        return error_info{WEBVIEW_ERROR_UNSUPPORTED};
+      }
+      hr = webview3->SetVirtualHostNameToFolderMapping(
+          host.c_str(), folder.c_str(),
+          COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+      webview3->Release();
+      if (FAILED(hr)) {
+        return error_info{WEBVIEW_ERROR_INVALID_STATE};
+      }
+    }
+    return {};
+  }
+
   user_script add_user_script_impl(const std::string &js) override {
     auto wjs = widen_string(js);
     std::wstring script_id;
@@ -4858,6 +4980,20 @@ WEBVIEW_API webview_error_t webview_return(webview_t w, const char *id,
   }
   return api_filter(
       [=] { return cast_to_webview(w)->resolve(id, status, result); });
+}
+
+WEBVIEW_API webview_error_t webview_set_custom_protocol(webview_t w,
+                                                        const char *scheme,
+                                                        const char *root_dir) {
+  using namespace webview::detail;
+  if (!w || !scheme || !root_dir) {
+    return WEBVIEW_ERROR_INVALID_ARGUMENT;
+  }
+  return api_filter(
+      [=] {
+        return cast_to_webview(w)->set_custom_protocol(std::string{scheme},
+                                                       std::string{root_dir});
+      });
 }
 
 WEBVIEW_API const webview_version_info_t *webview_version(void) {

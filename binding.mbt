@@ -51,6 +51,15 @@ extern "C" fn webview_bind(
 extern "C" fn webview_copy_cstr(cstr : Bytes) -> Bytes = "moonbit_webview_copy_cstr"
 
 ///|
+/// Register a custom scheme backed by a local root directory.
+#borrow(w, scheme, root_dir)
+pub extern "C" fn webview_set_custom_protocol(
+  w : WebView_t,
+  scheme : Bytes,
+  root_dir : Bytes,
+) -> Int = "webview_set_custom_protocol"
+
+///|
 /// Run a MoonBit closure on a detached native thread.
 #owned(closure)
 extern "C" fn run_in_background_thread(
