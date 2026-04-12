@@ -40,12 +40,12 @@ async fn main {
   )
   window.install(
     @webview.Plugin::new("console", plugin => {
-      plugin.command("log", (payload : String) => {
-        println("[child-console:log] \{payload}")
+      plugin.command("log", (payload : Json) => {
+        println("[child-console:log] \{payload.stringify()}")
         payload
       })
-      plugin.command("error", (payload : String) => {
-        println("[child-console:error] \{payload}")
+      plugin.command("error", (payload : Json) => {
+        println("[child-console:error] \{payload.stringify()}")
         payload
       })
     }),
