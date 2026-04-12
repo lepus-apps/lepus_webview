@@ -38,8 +38,12 @@ pub struct PluginBuilder {
 /// Plugin host built on top of `CommandBridge`.
 ///
 /// On the JavaScript side this exposes:
-/// - `window[global_name]["@@call"](plugin_name, api_name, payload)`
-/// - `window[global_name][plugin_name][api_name](payload)`
+/// - `window[global_name]["@@call"](plugin_name, api_name, ...args)`
+/// - `window[global_name][plugin_name][api_name](...args)`
+///
+/// Argument packing rule:
+/// - one argument: sent as-is
+/// - two or more arguments: sent as an array
 struct PluginHost[X] {
   webview : WebView[X]
   bridge : CommandBridge[X]
@@ -247,7 +251,7 @@ pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_sync(
 /// Registers an async typed plugin command.
 ///
 /// The command becomes callable from JavaScript through:
-/// `window.lepusApi[plugin_name][api_name](payload)`.
+/// `window.lepusApi[plugin_name][api_name](...args)`.
 /// The callback is spawned as a background task, non-blocking.
 pub fn[X, Payload : @json.FromJson, Reply : ToJson] PluginContext::command_async(
   self : PluginContext[X],
@@ -348,7 +352,7 @@ fn make_plugin_host_script(
   let global_name_js = string_literal(global_name)
   let bridge_global_name_js = string_literal(bridge_global_name)
   (
-    $|!function(){const n=\{global_name_js},e=window[n],t=e&&"object"==typeof e?e:Object.create(null);function r(){const n=window[\{bridge_global_name_js}];return n&&"function"==typeof n.send?n:null}t["@@call"]=function(n,e,t){const o=r();return o?o.send("plugin:"+JSON.stringify(n)+":"+JSON.stringify(e),t):Promise.reject(new Error("MoonBit command bridge is not available"))},t["@@ensurePlugin"]=function(n){const e=t[n];if(e&&"object"==typeof e)return e;const o=Object.create(null);return t[n]=o,o},t["@@defineApi"]=function(n,e,o){const i=t["@@ensurePlugin"](n);return i[e]=function(n){const e=r();return e?e.send(o,n):Promise.reject(new Error("MoonBit command bridge is not available"))},i[e]},t["@@has"]=function(n,e){const o=t[n];return!(!o||"function"!=typeof o[e])},window[n]=t}();
+    $|!function(){const n=\{global_name_js},e=window[n],t=e&&"object"==typeof e?e:Object.create(null);function r(){const n=window[\{bridge_global_name_js}];return n&&"function"==typeof n.send?n:null}function o(n,e){return n<2?e:2===n?e[1]:Array.prototype.slice.call(e,1)}t["@@bridgeGlobal"]=\{bridge_global_name_js},t["@@call"]=function(n,e){const t=r(),i=o(arguments.length,arguments);return t?t.send("plugin:"+JSON.stringify(n)+":"+JSON.stringify(e),i):Promise.reject(new Error("MoonBit command bridge is not available"))},t["@@ensurePlugin"]=function(n){const e=t[n];if(e&&"object"==typeof e)return e;const o=Object.create(null);return t[n]=o,o},t["@@defineApi"]=function(n,e,o){const i=t["@@ensurePlugin"](n);return i[e]=function(){const n=r(),e=arguments.length<2?arguments[0]:Array.prototype.slice.call(arguments);return n?n.send(o,e):Promise.reject(new Error("MoonBit command bridge is not available"))},i[e]},t["@@has"]=function(n,e){const o=t[n];return!(!o||"function"!=typeof o[e])},window[n]=t}();
   )
 }
 
@@ -376,7 +380,7 @@ fn make_plugin_api_script(
   let api_name_js = string_literal(api_name)
   let command_name_js = string_literal(command_name)
   (
-    $|!function(){const n=\{global_name_js},e=\{plugin_name_js},o=\{api_name_js},t=\{command_name_js},i=window[n]&&"object"==typeof window[n]?window[n]:window[n]=Object.create(null);if("function"==typeof i["@@defineApi"])return void i["@@defineApi"](e,o,t);(i[e]&&"object"==typeof i[e]?i[e]:i[e]=Object.create(null))[o]=function(n){const e=window[n];return e&&"function"==typeof e.send?e.send(t,n):Promise.reject(new Error("MoonBit command bridge is not available"))}}();
+    $|!function(){const g=\{global_name_js},p=\{plugin_name_js},a=\{api_name_js},c=\{command_name_js},h=window[g]&&"object"==typeof window[g]?window[g]:window[g]=Object.create(null);if("function"==typeof h["@@defineApi"])return void h["@@defineApi"](p,a,c);(h[p]&&"object"==typeof h[p]?h[p]:h[p]=Object.create(null))[a]=function(){const p=arguments.length<2?arguments[0]:Array.prototype.slice.call(arguments),a=h["@@bridgeGlobal"],g=a&&window[a];return g&&"function"==typeof g.send?g.send(c,p):Promise.reject(new Error("MoonBit command bridge is not available"))}}();
   )
 }
 
