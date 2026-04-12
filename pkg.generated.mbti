@@ -254,6 +254,7 @@ pub fn[X] WebView::reload_force(Self[X]) -> Unit
 pub fn[X] WebView::set_devtools(Self[X], Bool) -> Unit
 pub fn[X] WebView::set_fullscreen(Self[X], Bool) -> Unit
 pub fn[X] WebView::set_html(Self[X], String) -> Unit
+pub fn[X] WebView::set_custom_protocol(Self[X], String, String) -> Unit
 pub fn[X] WebView::set_size(Self[X], Int, Int, SizeHint) -> Unit
 pub fn[X] WebView::set_title(Self[X], String) -> Unit
 pub fn[X] WebView::set_traffic_light_position(Self[X], Int, Int) -> Unit
@@ -286,6 +287,7 @@ pub struct Window {
   enable_window_controls_plugin : Bool
   mut url : String
   mut html : String
+  pending_custom_protocols : Array[(String, String)]
   mut runtime_window_id : Int
   plugins : Array[Plugin]
 }
@@ -299,6 +301,7 @@ pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, 
 pub fn Window::run(Self) -> Unit
 pub fn Window::set_fullscreen(Self, Bool) -> Unit
 pub fn Window::set_html(Self, String) -> Unit
+pub fn Window::set_custom_protocol(Self, String, String) -> Unit
 pub fn Window::set_traffic_light_position(Self, Int, Int) -> Unit
 pub fn Window::set_window_customization(Self, Bool, Bool, Bool, Bool, Bool, TitleBarStyle, Bool) -> Unit
 pub fn Window::start_drag(Self) -> Unit
@@ -353,4 +356,3 @@ pub fn WindowState::int(Self) -> Int
 // Type aliases
 
 // Traits
-
