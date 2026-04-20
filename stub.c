@@ -572,6 +572,8 @@ static window_manager_t g_wm = {
     .request_mutex = PTHREAD_MUTEX_INITIALIZER,
     .next_message_id = 1};
 
+static int g_macos_default_menu_enabled = 1;
+
 /* ── IPC 子进程客户端 ─────────────────────────────────────────── */
 
 typedef struct
@@ -639,6 +641,11 @@ static void clear_remote_window_fd(int window_id)
         g_remote_window_fds[window_id] = IPC_INVALID_SOCKET;
     pthread_mutex_unlock(&g_wm.mutex);
 }
+
+#ifdef __APPLE__
+static void moonbit_macos_install_default_menu(void);
+static void moonbit_macos_clear_main_menu(void);
+#endif
 
 /* 前向声明：供较早的辅助函数使用。 */
 static int wm_dispatch(
@@ -1395,6 +1402,10 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_window(
         free(w);
         return -1;
     }
+#ifdef __APPLE__
+    if (g_macos_default_menu_enabled)
+        moonbit_macos_install_default_menu();
+#endif
 
     lp_backend_set_title(w->handle, w->title);
     lp_backend_set_size(w->handle, w->width, w->height, w->hints);
@@ -1408,6 +1419,39 @@ MOONBIT_FFI_EXPORT int moonbit_wm_create_window(
     fire_window_event(w, WINDOW_EVT_CREATED, NULL);
 
     return w->window_id;
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_menu_supported(void)
+{
+#ifdef __APPLE__
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_get_default_macos_menu(void)
+{
+#ifdef __APPLE__
+    return g_macos_default_menu_enabled;
+#else
+    return 0;
+#endif
+}
+
+MOONBIT_FFI_EXPORT int moonbit_wm_set_default_macos_menu(int enabled)
+{
+#ifdef __APPLE__
+    g_macos_default_menu_enabled = enabled ? 1 : 0;
+    if (g_macos_default_menu_enabled)
+        moonbit_macos_install_default_menu();
+    else
+        moonbit_macos_clear_main_menu();
+    return 0;
+#else
+    (void)enabled;
+    return -1;
+#endif
 }
 
 /**
@@ -1592,6 +1636,7 @@ typedef void (*mb_objc_msgsend_int_arg_t)(mb_id_t, mb_sel_t, int);
 typedef void (*mb_objc_msgsend_id_arg_t)(mb_id_t, mb_sel_t, mb_id_t);
 typedef void (*mb_objc_msgsend_id_id_arg_t)(mb_id_t, mb_sel_t, mb_id_t, mb_id_t);
 typedef void (*mb_objc_msgsend_point_arg_t)(mb_id_t, mb_sel_t, mb_point_t);
+typedef mb_id_t (*mb_objc_msgsend_id_sel_id_arg_ret_t)(mb_id_t, mb_sel_t, mb_id_t, mb_sel_t, mb_id_t);
 
 static void *moonbit_objc_msgsend_symbol(void)
 {
@@ -1666,6 +1711,163 @@ static mb_id_t moonbit_find_wk_webview(mb_id_t view, void *msgsend)
             return wk;
     }
     return NULL;
+}
+
+static mb_id_t moonbit_nsstring_from_utf8(const char *value, void *msgsend)
+{
+    if (!value || !msgsend)
+        return NULL;
+    mb_id_t ns_string = moonbit_objc_get_class("NSString");
+    mb_sel_t sel_string_with_utf8 = moonbit_sel_register_name("stringWithUTF8String:");
+    if (!ns_string || !sel_string_with_utf8)
+        return NULL;
+    return ((mb_objc_msgsend_cstr_arg_ret_t)msgsend)(ns_string, sel_string_with_utf8, value);
+}
+
+static mb_id_t moonbit_menu_add_item(
+    mb_id_t menu,
+    const char *title,
+    const char *action_name,
+    const char *key_equivalent,
+    unsigned long key_modifiers,
+    void *msgsend)
+{
+    if (!menu || !msgsend)
+        return NULL;
+    mb_sel_t sel_add_item = moonbit_sel_register_name("addItemWithTitle:action:keyEquivalent:");
+    mb_sel_t sel_set_key_mask = moonbit_sel_register_name("setKeyEquivalentModifierMask:");
+    if (!sel_add_item || !sel_set_key_mask)
+        return NULL;
+
+    mb_id_t ns_title = moonbit_nsstring_from_utf8(title ? title : "", msgsend);
+    mb_id_t ns_key = moonbit_nsstring_from_utf8(key_equivalent ? key_equivalent : "", msgsend);
+    mb_sel_t action = moonbit_sel_register_name(action_name ? action_name : "");
+    if (!ns_title || !ns_key)
+        return NULL;
+
+    mb_id_t item = ((mb_objc_msgsend_id_sel_id_arg_ret_t)msgsend)(
+        menu,
+        sel_add_item,
+        ns_title,
+        action,
+        ns_key);
+    if (item && key_modifiers != 0)
+        ((mb_objc_msgsend_u64_arg_t)msgsend)(item, sel_set_key_mask, key_modifiers);
+    return item;
+}
+
+static mb_id_t moonbit_macos_process_name(void *msgsend)
+{
+    if (!msgsend)
+        return moonbit_nsstring_from_utf8("App", msgsend);
+    mb_id_t ns_process_info = moonbit_objc_get_class("NSProcessInfo");
+    mb_sel_t sel_process_info = moonbit_sel_register_name("processInfo");
+    mb_sel_t sel_process_name = moonbit_sel_register_name("processName");
+    if (!ns_process_info || !sel_process_info || !sel_process_name)
+        return moonbit_nsstring_from_utf8("App", msgsend);
+    mb_id_t process_info = ((mb_objc_msgsend_id_ret_t)msgsend)(ns_process_info, sel_process_info);
+    if (!process_info)
+        return moonbit_nsstring_from_utf8("App", msgsend);
+    mb_id_t process_name = ((mb_objc_msgsend_id_ret_t)msgsend)(process_info, sel_process_name);
+    return process_name ? process_name : moonbit_nsstring_from_utf8("App", msgsend);
+}
+
+static mb_id_t moonbit_macos_new_menu_item(mb_id_t ns_menu_item_cls, mb_id_t title, void *msgsend)
+{
+    if (!ns_menu_item_cls || !title || !msgsend)
+        return NULL;
+    mb_sel_t sel_alloc = moonbit_sel_register_name("alloc");
+    mb_sel_t sel_init_with_title = moonbit_sel_register_name("initWithTitle:action:keyEquivalent:");
+    mb_id_t empty_key = moonbit_nsstring_from_utf8("", msgsend);
+    if (!sel_alloc || !sel_init_with_title || !empty_key)
+        return NULL;
+    mb_id_t item_alloc = ((mb_objc_msgsend_id_ret_t)msgsend)(ns_menu_item_cls, sel_alloc);
+    if (!item_alloc)
+        return NULL;
+    return ((mb_objc_msgsend_id_sel_id_arg_ret_t)msgsend)(
+        item_alloc,
+        sel_init_with_title,
+        title,
+        NULL,
+        empty_key);
+}
+
+static void moonbit_macos_install_default_menu(void)
+{
+    static int installed = 0;
+    if (installed)
+        return;
+
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    mb_id_t ns_app_cls = moonbit_objc_get_class("NSApplication");
+    mb_id_t ns_menu_cls = moonbit_objc_get_class("NSMenu");
+    mb_id_t ns_menu_item_cls = moonbit_objc_get_class("NSMenuItem");
+    if (!msgsend || !ns_app_cls || !ns_menu_cls || !ns_menu_item_cls)
+        return;
+
+    mb_sel_t sel_shared = moonbit_sel_register_name("sharedApplication");
+    mb_sel_t sel_main_menu = moonbit_sel_register_name("mainMenu");
+    mb_sel_t sel_set_main_menu = moonbit_sel_register_name("setMainMenu:");
+    mb_sel_t sel_alloc = moonbit_sel_register_name("alloc");
+    mb_sel_t sel_init = moonbit_sel_register_name("init");
+    mb_sel_t sel_set_submenu = moonbit_sel_register_name("setSubmenu:forItem:");
+    mb_sel_t sel_add_item_simple = moonbit_sel_register_name("addItem:");
+    if (!sel_shared || !sel_main_menu || !sel_set_main_menu || !sel_alloc || !sel_init || !sel_set_submenu || !sel_add_item_simple)
+        return;
+
+    mb_id_t app = ((mb_objc_msgsend_id_ret_t)msgsend)(ns_app_cls, sel_shared);
+    if (!app)
+        return;
+
+    mb_id_t existing_main = ((mb_objc_msgsend_id_ret_t)msgsend)(app, sel_main_menu);
+    if (existing_main)
+    {
+        installed = 1;
+        return;
+    }
+
+    const unsigned long NSEventModifierFlagShift = 1UL << 17;
+    const unsigned long NSEventModifierFlagCommand = 1UL << 20;
+
+    mb_id_t main_menu = ((mb_objc_msgsend_id_ret_t)msgsend)(((mb_objc_msgsend_id_ret_t)msgsend)(ns_menu_cls, sel_alloc), sel_init);
+    mb_id_t app_title = moonbit_macos_process_name(msgsend);
+    mb_id_t edit_title = moonbit_nsstring_from_utf8("Edit", msgsend);
+    mb_id_t app_menu_item = moonbit_macos_new_menu_item(ns_menu_item_cls, app_title, msgsend);
+    mb_id_t edit_menu_item = moonbit_macos_new_menu_item(ns_menu_item_cls, edit_title, msgsend);
+    mb_id_t app_menu = ((mb_objc_msgsend_id_ret_t)msgsend)(((mb_objc_msgsend_id_ret_t)msgsend)(ns_menu_cls, sel_alloc), sel_init);
+    mb_id_t edit_menu = ((mb_objc_msgsend_id_ret_t)msgsend)(((mb_objc_msgsend_id_ret_t)msgsend)(ns_menu_cls, sel_alloc), sel_init);
+    if (!main_menu || !app_menu_item || !edit_menu_item || !app_menu || !edit_menu)
+        return;
+
+    ((mb_objc_msgsend_id_arg_t)msgsend)(main_menu, sel_add_item_simple, app_menu_item);
+    ((mb_objc_msgsend_id_arg_t)msgsend)(main_menu, sel_add_item_simple, edit_menu_item);
+
+    moonbit_menu_add_item(app_menu, "Quit", "terminate:", "q", NSEventModifierFlagCommand, msgsend);
+    moonbit_menu_add_item(edit_menu, "Undo", "undo:", "z", NSEventModifierFlagCommand, msgsend);
+    moonbit_menu_add_item(edit_menu, "Redo", "redo:", "Z", NSEventModifierFlagCommand | NSEventModifierFlagShift, msgsend);
+    moonbit_menu_add_item(edit_menu, "Cut", "cut:", "x", NSEventModifierFlagCommand, msgsend);
+    moonbit_menu_add_item(edit_menu, "Copy", "copy:", "c", NSEventModifierFlagCommand, msgsend);
+    moonbit_menu_add_item(edit_menu, "Paste", "paste:", "v", NSEventModifierFlagCommand, msgsend);
+    moonbit_menu_add_item(edit_menu, "Select All", "selectAll:", "a", NSEventModifierFlagCommand, msgsend);
+
+    ((mb_objc_msgsend_id_id_arg_t)msgsend)(main_menu, sel_set_submenu, app_menu, app_menu_item);
+    ((mb_objc_msgsend_id_id_arg_t)msgsend)(main_menu, sel_set_submenu, edit_menu, edit_menu_item);
+    ((mb_objc_msgsend_id_arg_t)msgsend)(app, sel_set_main_menu, main_menu);
+    installed = 1;
+}
+
+static void moonbit_macos_clear_main_menu(void)
+{
+    void *msgsend = moonbit_objc_msgsend_symbol();
+    mb_id_t ns_app_cls = moonbit_objc_get_class("NSApplication");
+    mb_sel_t sel_shared = moonbit_sel_register_name("sharedApplication");
+    mb_sel_t sel_set_main_menu = moonbit_sel_register_name("setMainMenu:");
+    if (!msgsend || !ns_app_cls || !sel_shared || !sel_set_main_menu)
+        return;
+    mb_id_t app = ((mb_objc_msgsend_id_ret_t)msgsend)(ns_app_cls, sel_shared);
+    if (!app)
+        return;
+    ((mb_objc_msgsend_id_arg_t)msgsend)(app, sel_set_main_menu, NULL);
 }
 #endif
 
