@@ -12,7 +12,7 @@ struct SumReply {
 ///|
 async fn sum_async_handler(payload : SumPayload) -> SumReply {
   @async.sleep(1000)
-  SumReply::{ total: payload.left + payload.right }
+  { total: payload.left + payload.right }
 }
 
 ///|

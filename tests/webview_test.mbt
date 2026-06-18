@@ -1,9 +1,9 @@
 ///|
 test {
   let container = box <| [
-      text <| "Hello world",
-      text <| "Hello world",
-    ]
+    text <| "Hello world",
+    text <| "Hello world",
+  ]
   inspect(
     container.render(),
     content=(
@@ -15,7 +15,7 @@ test {
 
 ///|
 trait Component {
-  render(Self) -> String
+  fn render(Self) -> String
 }
 
 ///|
@@ -24,12 +24,12 @@ struct Box {
 }
 
 ///|
-impl Component for Box with render(self) {
+impl Component for Box with fn render(self) {
   self.children.map(c => c.render()).join("\n")
 }
 
 ///|
-impl Component for Text with render(self) {
+impl Component for Text with fn render(self) {
   self.text
 }
 

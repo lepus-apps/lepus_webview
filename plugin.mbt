@@ -7,7 +7,7 @@
 /// pub fn plugin() -> @webview.Plugin {
 ///   @webview.Plugin::new("math", fn(plugin) {
 ///     plugin.command("sum", fn(payload : SumPayload) {
-///       SumReply::{ total: payload.left + payload.right }
+///       SumReply{ total: payload.left + payload.right }
 ///     })
 ///   })
 /// }

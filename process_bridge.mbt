@@ -373,8 +373,7 @@ pub async fn WindowManager::serve_process_commands(
   while self.wait_child_noblock(child_pid) == 0 {
     match self.try_pop_message(0) {
       Some(message) =>
-        if message.message_type == IpcMessageType::Request &&
-          message.subtype == subtype {
+        if message.message_type == Request && message.subtype == subtype {
           let response = try {
             let request = ProcessCommandRequest::parse(message.data)
             handler(request)

@@ -33,7 +33,7 @@ pub fn Window::new(
   url? : String = "",
   width? : Int = 800,
   height? : Int = 600,
-  size_hint? : SizeHint = SizeHint::None,
+  size_hint? : SizeHint = None,
   debug? : Int = 0,
   devtools? : Bool = false,
   child_arg? : String = "--moonbit-webview-child",
@@ -42,7 +42,7 @@ pub fn Window::new(
   closeable? : Bool = true,
   always_on_top? : Bool = false,
   transparent? : Bool = false,
-  title_bar_style? : TitleBarStyle = TitleBarStyle::Default,
+  title_bar_style? : TitleBarStyle = Default,
   title_bar_overlay? : Bool = false,
   traffic_light_position? : (Int, Int) = (-1, -1),
   enable_window_controls_plugin? : Bool = true,
@@ -225,7 +225,7 @@ async fn Window::run_child_async(self : Window) -> Unit {
     })
     self.install_child_plugins(webview, wm)
     if self.frameless ||
-      self.title_bar_style == TitleBarStyle::Hidden ||
+      self.title_bar_style == Hidden ||
       self.title_bar_overlay {
       webview.enable_custom_titlebar_support()
     }

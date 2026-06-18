@@ -74,10 +74,10 @@ pub fn WindowManager::init(is_main? : Bool = true) -> WindowManager {
   guard ok == 0 else { abort("WindowManager::init failed") }
   let process_type = match wm_get_process_type() {
     0 => ProcessType::Main
-    1 => ProcessType::Child
-    _ => ProcessType::Unknown
+    1 => Child
+    _ => Unknown
   }
-  WindowManager::{ process_type, window_ids: [] }
+  { process_type, window_ids: [] }
 }
 
 ///|
@@ -156,13 +156,13 @@ pub fn WindowManager::connect_child_process() -> Int {
 ///|
 /// Return true when running in main process.
 pub fn WindowManager::is_main_process(self : WindowManager) -> Bool {
-  self.process_type == ProcessType::Main
+  self.process_type == Main
 }
 
 ///|
 /// Return true when running in child process.
 pub fn WindowManager::is_child_process(self : WindowManager) -> Bool {
-  self.process_type == ProcessType::Child
+  self.process_type == Child
 }
 
 ///|
@@ -350,7 +350,7 @@ pub fn WindowManager::broadcast(
   subtype : String,
   data : String,
 ) -> Int {
-  self.send_message(source_window_id, 0, IpcMessageType::Event, subtype, data)
+  self.send_message(source_window_id, 0, Event, subtype, data)
 }
 
 ///|
@@ -405,18 +405,18 @@ pub fn WindowManager::try_pop_message(
   let message_id = ipc_message_id(handle)
   let message_type = match ipc_message_type(handle) {
     0 => IpcMessageType::Data
-    1 => IpcMessageType::Command
-    2 => IpcMessageType::Event
-    3 => IpcMessageType::Request
-    4 => IpcMessageType::Response
-    _ => IpcMessageType::Data
+    1 => Command
+    2 => Event
+    3 => Request
+    4 => Response
+    _ => Data
   }
   let subtype = @encoding/utf8.decode(ipc_message_subtype(handle)) catch {
     _ => ""
   }
   let data = @encoding/utf8.decode(ipc_message_data(handle)) catch { _ => "" }
   ipc_message_free(handle)
-  Some(IpcMessage::{
+  Some({
     source_window_id,
     target_window_id,
     message_type,

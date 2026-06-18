@@ -9,6 +9,8 @@ import {
 // Values
 pub fn[Reply : @json.FromJson] decode_process_command_response(String) -> Reply raise ProcessCommandError
 
+pub fn webview_set_custom_protocol(WebView_t, Bytes, Bytes) -> Int
+
 pub fn wm_cleanup() -> Unit
 
 pub fn wm_close_window(Int) -> Int
@@ -251,10 +253,10 @@ pub fn[X] WebView::minimize(Self[X]) -> Unit
 pub fn[X] WebView::navigate(Self[X], String) -> Unit
 pub fn[X] WebView::reload(Self[X]) -> Unit
 pub fn[X] WebView::reload_force(Self[X]) -> Unit
+pub fn[X] WebView::set_custom_protocol(Self[X], String, String) -> Unit
 pub fn[X] WebView::set_devtools(Self[X], Bool) -> Unit
 pub fn[X] WebView::set_fullscreen(Self[X], Bool) -> Unit
 pub fn[X] WebView::set_html(Self[X], String) -> Unit
-pub fn[X] WebView::set_custom_protocol(Self[X], String, String) -> Unit
 pub fn[X] WebView::set_size(Self[X], Int, Int, SizeHint) -> Unit
 pub fn[X] WebView::set_title(Self[X], String) -> Unit
 pub fn[X] WebView::set_traffic_light_position(Self[X], Int, Int) -> Unit
@@ -298,10 +300,10 @@ pub fn Window::maximize(Self) -> Unit
 pub fn Window::minimize(Self) -> Unit
 pub fn Window::navigate(Self, String) -> Unit
 pub fn Window::new(title? : String, url? : String, width? : Int, height? : Int, size_hint? : SizeHint, debug? : Int, devtools? : Bool, child_arg? : String, frameless? : Bool, resizable? : Bool, closeable? : Bool, always_on_top? : Bool, transparent? : Bool, title_bar_style? : TitleBarStyle, title_bar_overlay? : Bool, traffic_light_position? : (Int, Int), enable_window_controls_plugin? : Bool) -> Self
-pub fn Window::run(Self) -> Unit
+pub async fn Window::run(Self) -> Unit
+pub fn Window::set_custom_protocol(Self, String, String) -> Unit
 pub fn Window::set_fullscreen(Self, Bool) -> Unit
 pub fn Window::set_html(Self, String) -> Unit
-pub fn Window::set_custom_protocol(Self, String, String) -> Unit
 pub fn Window::set_traffic_light_position(Self, Int, Int) -> Unit
 pub fn Window::set_window_customization(Self, Bool, Bool, Bool, Bool, Bool, TitleBarStyle, Bool) -> Unit
 pub fn Window::start_drag(Self) -> Unit
@@ -356,3 +358,4 @@ pub fn WindowState::int(Self) -> Int
 // Type aliases
 
 // Traits
+

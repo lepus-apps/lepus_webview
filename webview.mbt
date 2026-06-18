@@ -151,7 +151,7 @@ fn[X] WebView::new_managed(
       ),
     )
   }
-  WebView::{ handle, window_id, task_group }
+  { handle, window_id, task_group }
 }
 
 ///|
